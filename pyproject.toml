@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ppt-template-to-pdf"
+version = "1.1.0"
+description = "Fill a PowerPoint template from YAML and export the result to PDF."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["powerpoint", "pptx", "yaml", "pdf", "templating"]
+dependencies = [
+    "python-pptx>=1.0.2",
+    "PyYAML>=6.0.4",
+    "pywin32>=312; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+ppt-fill = "ppt_template_to_pdf:cli"
+
+[tool.setuptools]
+py-modules = ["ppt_template_to_pdf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
