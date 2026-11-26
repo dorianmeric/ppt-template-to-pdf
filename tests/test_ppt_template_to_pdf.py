@@ -994,11 +994,11 @@ def test_host_target_is_a_known_pair() -> None:
 @pytest.mark.parametrize(
     "os_slug,arch,expected",
     [
-        ("windows", "x64", "ppt-fill-1.9.1-windows-x64.exe"),
-        ("windows", "x86", "ppt-fill-1.9.1-windows-x86.exe"),
-        ("macos", "arm64", "ppt-fill-1.9.1-macos-arm64"),
-        ("macos", "x86_64", "ppt-fill-1.9.1-macos-x86_64"),
-        ("linux", "x86_64", "ppt-fill-1.9.1-linux-x86_64"),
+        ("windows", "x64", "ppt-template-to-pdf-1.9.1-windows-x64.exe"),
+        ("windows", "x86", "ppt-template-to-pdf-1.9.1-windows-x86.exe"),
+        ("macos", "arm64", "ppt-template-to-pdf-1.9.1-macos-arm64"),
+        ("macos", "x86_64", "ppt-template-to-pdf-1.9.1-macos-x86_64"),
+        ("linux", "x86_64", "ppt-template-to-pdf-1.9.1-linux-x86_64"),
     ],
 )
 def test_binary_names_match_the_published_assets(os_slug: str, arch: str, expected: str) -> None:
@@ -1012,14 +1012,14 @@ def test_nuitka_command_mirrors_the_workflow(tmp_path: Path) -> None:
     windows = tool.nuitka_command("1.9.1", "windows", "x64", tmp_path)
     assert windows[:3] == [sys.executable, "-m", "nuitka"]
     assert "--onefile" in windows
-    assert "--output-filename=ppt-fill-1.9.1-windows-x64.exe" in windows
+    assert "--output-filename=ppt-template-to-pdf-1.9.1-windows-x64.exe" in windows
     assert "--windows-console-mode=force" in windows
     assert "--include-package=win32com" in windows
     assert "--file-version=1.9.1" in windows
     assert windows[-1].endswith("ppt_template_to_pdf.py")
 
     linux = tool.nuitka_command("1.9.1", "linux", "x86_64", tmp_path)
-    assert "--output-filename=ppt-fill-1.9.1-linux-x86_64" in linux
+    assert "--output-filename=ppt-template-to-pdf-1.9.1-linux-x86_64" in linux
     assert not any("win32com" in part or "windows-" in part for part in linux)
 
 

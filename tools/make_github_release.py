@@ -4,7 +4,7 @@
 Running it with no arguments produces both:
 
     dist/ppt-template-to-pdf-<version>.zip        the five source files a user needs
-    dist/ppt-fill-<version>-<platform>-<arch>     one self-contained executable
+    dist/ppt-template-to-pdf-<version>-<platform>-<arch>     one self-contained executable
 
 The zip ships the five files a user needs to run or install the tool, and
 nothing else:
@@ -48,7 +48,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_NAME = "ppt-template-to-pdf"
-BINARY_PREFIX = "ppt-fill"
+BINARY_PREFIX = "ppt-template-to-pdf"
 SCRIPT = PROJECT_ROOT / "ppt_template_to_pdf.py"
 ICON = PROJECT_ROOT / "assets" / "logo.ico"
 

@@ -784,31 +784,31 @@ Every release carries a binary for each common platform, so a user with no Pytho
 
 | File | Runs on | Notes |
 | --- | --- | --- |
-| `ppt-fill-<version>-windows-x64.exe` | 64-bit Windows | The usual choice on Windows. |
-| `ppt-fill-<version>-windows-x86.exe` | 32-bit Windows, and 64-bit Windows | Take it only if you are on 32-bit Windows or a tool of yours insists on a 32-bit binary. |
-| `ppt-fill-<version>-macos-arm64` | macOS on Apple silicon (M1 and later) | Needs macOS 11 or newer. |
-| `ppt-fill-<version>-macos-x86_64` | macOS on Intel | Needs macOS 11 or newer. |
-| `ppt-fill-<version>-linux-x86_64` | 64-bit Linux | Needs glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10+. |
+| `ppt-template-to-pdf-<version>-windows-x64.exe` | 64-bit Windows | The usual choice on Windows. |
+| `ppt-template-to-pdf-<version>-windows-x86.exe` | 32-bit Windows, and 64-bit Windows | Take it only if you are on 32-bit Windows or a tool of yours insists on a 32-bit binary. |
+| `ppt-template-to-pdf-<version>-macos-arm64` | macOS on Apple silicon (M1 and later) | Needs macOS 11 or newer. |
+| `ppt-template-to-pdf-<version>-macos-x86_64` | macOS on Intel | Needs macOS 11 or newer. |
+| `ppt-template-to-pdf-<version>-linux-x86_64` | 64-bit Linux | Needs glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10+. |
 
 Each one is a single file: the CPython runtime, the standard library, python-pptx, PyYAML, lxml, Pillow, XlsxWriter, and (on Windows) pywin32 are all inside. Copy it anywhere, open a terminal, and run it like the script:
 
 ```
 # Windows
-ppt-fill-1.9.1-windows-x64.exe --help
-ppt-fill-1.9.1-windows-x64.exe "Template.pptx" "Deal data.yaml"
+ppt-template-to-pdf-1.9.1-windows-x64.exe --help
+ppt-template-to-pdf-1.9.1-windows-x64.exe "Template.pptx" "Deal data.yaml"
 
 # macOS and Linux: restore the executable bit first if the download lost it
-chmod +x ./ppt-fill-1.9.1-linux-x86_64
-./ppt-fill-1.9.1-linux-x86_64 "Template.pptx" "Deal data.yaml"
-./ppt-fill-1.9.1-macos-arm64 "Template.pptx" --list-fields
-./ppt-fill-1.9.1-linux-x86_64 "Template.pptx" "Deal data.json" -o Output --name "Q3 update"
+chmod +x ./ppt-template-to-pdf-1.9.1-linux-x86_64
+./ppt-template-to-pdf-1.9.1-linux-x86_64 "Template.pptx" "Deal data.yaml"
+./ppt-template-to-pdf-1.9.1-macos-arm64 "Template.pptx" --list-fields
+./ppt-template-to-pdf-1.9.1-linux-x86_64 "Template.pptx" "Deal data.json" -o Output --name "Q3 update"
 ```
 
 Every flag, exit code, and message is the same as the Python version. Three things are worth knowing:
 
 - **PDF export is Windows-only.** It drives desktop PowerPoint over COM, so on macOS and Linux the binary fills the `.pptx` and stops there. Add `--no-pdf` and convert afterwards with LibreOffice: `soffice --headless --convert-to pdf "deck.pptx"`. Legacy `.ppt` and `.pot` templates are Windows-only for the same reason.
 - **One file, unpacked at start.** These are Nuitka one-file builds, so each one unpacks itself into the temp folder (`%TEMP%`, `$TMPDIR`, `/tmp`) before running. That costs a second or two on the first start and leaves nothing behind.
-- **Downloaded binaries may need a nudge.** A file fetched through a browser can lose the executable bit on macOS and Linux (`chmod +x`), and macOS may quarantine it: `xattr -d com.apple.quarantine ppt-fill-1.9.1-macos-arm64`. The macOS builds are unsigned, so prefer `curl -LO` when you want to skip that.
+- **Downloaded binaries may need a nudge.** A file fetched through a browser can lose the executable bit on macOS and Linux (`chmod +x`), and macOS may quarantine it: `xattr -d com.apple.quarantine ppt-template-to-pdf-1.9.1-macos-arm64`. The macOS builds are unsigned, so prefer `curl -LO` when you want to skip that.
 
 Windows builds work with either bitness of Office, because PowerPoint is an out-of-process COM server: a 32-bit `ppt-template-to-pdf` can export a PDF through 64-bit Office and the other way round.
 
@@ -831,11 +831,11 @@ Each release publishes six assets:
 | Asset | What it is |
 | --- | --- |
 | `ppt-template-to-pdf-<version>.zip` | The lean source bundle, described below. |
-| `ppt-fill-<version>-windows-x64.exe` | Windows, 64-bit. |
-| `ppt-fill-<version>-windows-x86.exe` | Windows, 32-bit. |
-| `ppt-fill-<version>-macos-arm64` | macOS on Apple silicon. |
-| `ppt-fill-<version>-macos-x86_64` | macOS on Intel. |
-| `ppt-fill-<version>-linux-x86_64` | Linux, 64-bit. |
+| `ppt-template-to-pdf-<version>-windows-x64.exe` | Windows, 64-bit. |
+| `ppt-template-to-pdf-<version>-windows-x86.exe` | Windows, 32-bit. |
+| `ppt-template-to-pdf-<version>-macos-arm64` | macOS on Apple silicon. |
+| `ppt-template-to-pdf-<version>-macos-x86_64` | macOS on Intel. |
+| `ppt-template-to-pdf-<version>-linux-x86_64` | Linux, 64-bit. |
 
 See [Pre-built executables](#pre-built-executables) for requirements and usage.
 
@@ -869,7 +869,7 @@ python tools/make_github_release.py
 
 ```
 dist/ppt-template-to-pdf-1.9.1.zip
-dist/ppt-fill-1.9.1-windows-x64.exe
+dist/ppt-template-to-pdf-1.9.1-windows-x64.exe
 ```
 
 It calls Nuitka with the same options the workflow passes to Nuitka-Action, names the binary the way the released asset is named, and runs `--version` against it before reporting it. Nuitka cannot cross-compile, so each platform and architecture has to run it on its own machine; `--binary-only` skips the zip when that is all you want.
