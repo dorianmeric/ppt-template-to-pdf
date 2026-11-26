@@ -635,6 +635,7 @@ def test_legacy_template_is_converted_and_cleaned_up(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(subject, "convert_with_powerpoint", fake_convert)
     monkeypatch.setattr(subject, "pywin32_available", lambda: True)
+    monkeypatch.setattr(subject.sys, "platform", "win32")
     with subject.usable_template(legacy, quiet()) as template_path:
         assert template_path != legacy
         assert template_path.suffix == ".pptx"
@@ -758,7 +759,7 @@ def test_dry_run_reports_the_properties_it_would_set(tmp_path: Path, capsys) -> 
         tmp_path,
         "CLIENT_NAME: Example\nPROPERTIES:\n  title: Q3\n  author: Deal team\n",
     )
-    assert subject.main([str(template), str(data), "--dry-run"]) == 0
+    assert subject.main([str(template), str(data), "--no-pdf", "--dry-run"]) == 0
 
     printed = capsys.readouterr().out
     assert "Dry run: 1 ID matched 1 text shape" in printed
