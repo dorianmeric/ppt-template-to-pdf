@@ -10,6 +10,7 @@
 | `screenshots/selection-pane.png` | README screenshot of Method 1, shape names. |
 | `screenshots/token.png` | README screenshot of Method 2, tokens in the text. |
 | `screenshots/demo-template.pptx` | The template used in both screenshots. |
+| `logo.ico` | Multi-size icon for the Windows executable built by `Nuitka-Action`. |
 
 The screenshots are real captures of Microsoft 365 PowerPoint on Windows at 100% display scaling. To retake them, open `screenshots/demo-template.pptx`, show Home → Arrange → Selection Pane, select a shape, and capture the window. Keep both pictures at the same window size so they match.
 
@@ -35,5 +36,13 @@ msedge --headless --hide-scrollbars --window-size=512,512 ^
        --default-background-color=00000000 ^
        --screenshot=assets/logo.png assets/logo.svg
 ```
+
+Regenerate the icon for the Windows executable from the PNG mark:
+
+```
+python -c "from PIL import Image; Image.open('assets/logo.png').convert('RGBA').save('assets/logo.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+```
+
+`logo.ico` is committed because the release workflow needs it at build time.
 
 Set the social preview: repository Settings → General → Social preview → Upload `assets/banner.png`. GitHub wants 1280 × 640 and under 1 MB.

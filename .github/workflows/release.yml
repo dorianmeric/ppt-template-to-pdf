@@ -1,9 +1,15 @@
 name: Release
 
 # Cut a release by pushing a tag that matches the version in pyproject.toml and
-# __version__, or run this workflow by hand and pass the version. The workflow
-# builds the lean zip, checks it, installs it in a clean runner, and publishes
-# the GitHub release with the zip attached.
+# __version__, or run this workflow by hand and pass the version. It publishes
+# three assets:
+#
+#   ppt-template-to-pdf-<version>.zip   the lean source bundle
+#   ppt-fill-<version>-x64.exe          Windows executable, 64-bit
+#   ppt-fill-<version>-x86.exe          Windows executable, 32-bit
+#
+# The executables are built with Nuitka (Nuitka-Action) on a Windows runner, one
+# per Python architecture, and each one is smoke tested before it is published.
 
 on:
   push:
@@ -12,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release, for example 1.7.0. A leading v is accepted."
+        description: "Version to release, for example 1.8.0. A leading v is accepted."
         required: true
         type: string
       draft:
@@ -29,19 +35,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish the release zip
+  version:
+    name: Work out the version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Work out the tag and version
+      - name: Resolve the tag and the version
         id: meta
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -58,13 +59,26 @@ jobs:
           case "$version" in
             [0-9]*.[0-9]*.[0-9]*) ;;
             *)
-              echo "::error::'$version' is not a version such as 1.7.0"
+              echo "::error::'$version' is not a version such as 1.8.0"
               exit 1
               ;;
           esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "Releasing version $version as tag v$version"
+
+  bundle:
+    name: Source bundle (zip)
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Run the tests
         run: |
@@ -74,12 +88,12 @@ jobs:
 
       - name: Build the zip
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: python tools/make_release_zip.py --expect-version "$VERSION"
 
       - name: Check the zip holds only the release files
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           archive="dist/ppt-template-to-pdf-$VERSION.zip"
@@ -91,27 +105,134 @@ jobs:
 
       - name: Install the zip and run the tool
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           unzip -q "dist/ppt-template-to-pdf-$VERSION.zip" -d build
           python -m pip install --disable-pip-version-check --quiet "build/ppt-template-to-pdf-$VERSION"
           ppt-fill --version
 
+      - name: Upload the zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-bundle
+          path: dist/ppt-template-to-pdf-*.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows executable (${{ matrix.arch }})
+    needs: version
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, x86]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up the ${{ matrix.arch }} Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: ${{ matrix.arch }}
+
+      - name: Install the runtime dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --quiet -r requirements.txt
+          python -c "import platform, struct, sys; print(sys.version); print(platform.machine(), struct.calcsize('P') * 8, 'bit')"
+
+      - name: Build the executable with Nuitka
+        uses: Nuitka/Nuitka-Action@v1.5
+        with:
+          nuitka-version: "4.4"
+          script-name: ppt_template_to_pdf.py
+          mode: onefile
+          output-dir: dist
+          output-file: ppt-fill-${{ needs.version.outputs.version }}-${{ matrix.arch }}.exe
+          windows-icon-from-ico: assets/logo.ico
+          windows-console-mode: force
+          include-package: win32com
+          include-package-data: pptx
+          company-name: ppt-template-to-pdf
+          product-name: ppt-template-to-pdf
+          file-description: Fill a PowerPoint template from YAML or JSON and export it to PDF
+          file-version: ${{ needs.version.outputs.version }}
+          product-version: ${{ needs.version.outputs.version }}
+          copyright: MIT licensed
+          assume-yes-for-downloads: true
+
+      - name: Smoke test the executable
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          $exe = "dist/ppt-fill-$env:VERSION-$env:ARCH.exe"
+          if (-not (Test-Path $exe)) { throw "Nuitka did not produce $exe" }
+          Get-Item $exe | Select-Object Name, Length
+          & $exe --version
+          if ($LASTEXITCODE) { throw "--version exited with $LASTEXITCODE" }
+          & $exe "assets/screenshots/demo-template.pptx" --list-fields
+          if ($LASTEXITCODE) { throw "--list-fields exited with $LASTEXITCODE" }
+          $json = '{ "TRANSACTION_TITLE": "CI build", "SUMMARY": "Nuitka build works", "DISCLAIMER": "Internal" }'
+          Set-Content -Path smoke.json -Value $json -Encoding utf8
+          & $exe "assets/screenshots/demo-template.pptx" smoke.json -o smoke-out --no-pdf
+          if ($LASTEXITCODE) { throw "filling exited with $LASTEXITCODE" }
+          if (-not (Get-ChildItem smoke-out -Filter *.pptx)) { throw "The executable wrote no PPTX" }
+
+      - name: Upload the executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-${{ matrix.arch }}
+          path: dist/*.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [version, bundle, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect the assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List the assets
+        run: ls -lh release-assets
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
           DRAFT: ${{ inputs.draft }}
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/release-notes.md"
           cat > "$notes" <<EOF
-          Lean release bundle for version $VERSION.
+          Release $VERSION of ppt-template-to-pdf: a Python script that fills a
+          PowerPoint template from YAML or JSON and exports the deck to PDF.
 
-          The zip unpacks into a folder named ppt-template-to-pdf-$VERSION holding
-          only what a user needs:
+          ## Windows executable (no Python needed)
+
+          - \`ppt-fill-$VERSION-x64.exe\` - 64-bit Windows, for 64-bit Office
+          - \`ppt-fill-$VERSION-x86.exe\` - 32-bit Windows and 32-bit Office
+
+          Pick the build that matches the bitness of the installed Office, because a
+          32-bit program can only automate 32-bit PowerPoint. Each one is a single file with the Python runtime and every dependency
+          inside, built with Nuitka. Copy it anywhere and run it from a terminal:
+
+              ppt-fill-$VERSION-x64.exe --help
+              ppt-fill-$VERSION-x64.exe "Template.pptx" "Deal data.yaml"
+
+          Desktop PowerPoint is still needed for PDF export and for reading legacy
+          .ppt and .pot templates; add --no-pdf to work without it.
+
+          ## Source bundle
+
+          \`ppt-template-to-pdf-$VERSION.zip\` unpacks into a folder holding only:
 
           - ppt_template_to_pdf.py - the script
           - README.md - the full documentation
@@ -119,13 +240,11 @@ jobs:
           - requirements.txt - the runtime dependencies
           - LICENSE - MIT
 
-          Run it without installing anything:
-
               unzip ppt-template-to-pdf-$VERSION.zip
               python -m pip install -r ppt-template-to-pdf-$VERSION/requirements.txt
               python ppt-template-to-pdf-$VERSION/ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"
 
-          Or install the ppt-fill command:
+          Or install the console command:
 
               python -m pip install ./ppt-template-to-pdf-$VERSION
               ppt-fill "Template.pptx" "Deal data.yaml"
@@ -134,7 +253,7 @@ jobs:
           EOF
           draft=""
           if [ "$DRAFT" = "true" ]; then draft="--draft"; fi
-          gh release create "$TAG" "dist/ppt-template-to-pdf-$VERSION.zip" \
+          gh release create "$TAG" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "ppt-template-to-pdf $VERSION" \

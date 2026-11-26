@@ -11,6 +11,8 @@
 
 `ppt_template_to_pdf.py` takes a PowerPoint template, replaces the placeholders with values from a **YAML or JSON** data file, saves the filled deck as `.pptx`, and exports the same deck to `.pdf`. It is a command-line tool and a Python module, so it works by hand, from a script, from a scheduled job, or in CI.
 
+On Windows you do not need Python at all: grab `ppt-fill-<version>-x64.exe` (or `-x86.exe` for 32-bit Office) from [Releases](../../releases) — one file with the runtime and every dependency inside. See [Windows executables](#windows-executables).
+
 People find this repo looking for:
 
 - a **script to update PowerPoint with variables**
@@ -70,6 +72,7 @@ Template - Deal data - 2026-11-26.pdf
   - [FAQ: update PowerPoint with Python](#faq-update-powerpoint-with-python)
   - [How this compares to other tools](#how-this-compares-to-other-tools)
   - [Search terms](#search-terms)
+  - [Windows executables](#windows-executables)
   - [Releases](#releases)
   - [Run the tests](#run-the-tests)
   - [License](#license)
@@ -752,12 +755,59 @@ If your input is a spreadsheet and your output is a set of branded decks plus PD
 
 Variables, placeholders, tokens, mail merge, templating, data merge, python-pptx wrapper, pptx template filler, PowerPoint automation, PowerPoint generation, PPTX to PDF, `.potx` template, `.pptm`, `python-pptx` text replacement, replace text in PowerPoint with Python, fill PowerPoint template from YAML, fill PowerPoint template from JSON, fill PPTX from an API response, PowerPoint template from JSON in Python, generate slides from JSON data, fill PowerPoint template from Excel, generate PowerPoint report in Python, dynamic PowerPoint decks, batch PowerPoint generation, PowerPoint CLI, slide master placeholders, edit slide layout text in Python, replace placeholder on every slide, fill every occurrence of a placeholder, set PowerPoint document properties in Python, set PDF title and author from Python, PDF metadata for PowerPoint export, python-pptx core properties, docProps title subject keywords.
 
-## Releases
+## Windows executables
 
-Each release ships a small zip with only what a user needs, laid out inside one folder:
+Every release carries two pre-built Windows executables, so a user with no Python installed can still run the fill:
+
+| File | Runs on |
+| --- | --- |
+| `ppt-fill-<version>-x64.exe` | 64-bit Windows with 64-bit Office. The usual choice. |
+| `ppt-fill-<version>-x86.exe` | 32-bit Windows, or 32-bit Office on 64-bit Windows. |
+
+Pick the build that matches the **bitness of your Office installation**, not just of Windows: a 32-bit program can only automate a 32-bit copy of PowerPoint, so the `x86` build cannot export a PDF through 64-bit Office and the other way round. Check with File > Account > About PowerPoint; the version line says 32-bit or 64-bit. Filling the `.pptx` and the `--no-pdf` path work either way.
+
+Each one is a single file: the CPython runtime, the standard library, python-pptx, PyYAML, lxml, Pillow, XlsxWriter, and pywin32 are all inside. Copy it anywhere, open a terminal, and run it like the script:
 
 ```
-ppt-template-to-pdf-1.7.0/
+ppt-fill-1.8.0-x64.exe --help
+ppt-fill-1.8.0-x64.exe "Template.pptx" "Deal data.yaml"
+ppt-fill-1.8.0-x64.exe "Template.pptx" --list-fields
+ppt-fill-1.8.0-x64.exe "Template.pptx" "Deal data.json" -o Output --name "Q3 update"
+```
+
+Every flag, exit code, and message is the same as the Python version. Two things are worth knowing:
+
+- Desktop PowerPoint is still required for PDF export and for reading legacy `.ppt` and `.pot` templates. Add `--no-pdf` to fill a `.pptx` on a machine without Office.
+- The executable is a Nuitka one-file build, so it unpacks itself into `%TEMP%` before starting. That costs a second or two on the first run; nothing is left behind afterwards except the usual temp folder.
+
+They are built in CI by [Nuitka](https://nuitka.net/) through [Nuitka-Action](https://github.com/Nuitka/Nuitka-Action): one job per Python architecture, each smoke tested (`--version`, `--list-fields`, and a real fill) before it is attached to the release. Nuitka compiles the Python modules to C and bundles the runtime and the extension modules, which is what makes a single file possible.
+
+To build one yourself on Windows:
+
+```
+python -m pip install -r requirements.txt nuitka
+python -m nuitka --onefile --output-dir=dist --output-filename=ppt-fill.exe ^
+    --windows-icon-from-ico=assets/logo.ico --windows-console-mode=force ^
+    --include-package=win32com --include-package-data=pptx ^
+    ppt_template_to_pdf.py
+```
+
+Use a 32-bit Python to get the x86 build; Nuitka cannot cross-compile. The workflow passes the same options plus the version metadata.
+
+## Releases
+
+Each release publishes three assets:
+
+| Asset | What it is |
+| --- | --- |
+| `ppt-template-to-pdf-<version>.zip` | The lean source bundle, described below. |
+| `ppt-fill-<version>-x64.exe` | The 64-bit Windows executable (see [Windows executables](#windows-executables)). |
+| `ppt-fill-<version>-x86.exe` | The 32-bit Windows executable. |
+
+The zip holds only what a user needs, laid out inside one folder:
+
+```
+ppt-template-to-pdf-1.8.0/
   ppt_template_to_pdf.py
   README.md
   pyproject.toml
@@ -778,11 +828,16 @@ It writes `dist/ppt-template-to-pdf-<version>.zip`, reads the version from `pypr
 Cut a release by pushing a tag that matches the version:
 
 ```
-git tag v1.7.0
+git tag v1.8.0
 git push origin main --tags
 ```
 
-`.github/workflows/release.yml` then does the rest: it builds the zip, fails if anything unexpected slipped in, installs the zip in a clean runner and runs `ppt-fill --version` to prove it works, and publishes the GitHub release with the zip attached and notes that explain how to run it.
+`.github/workflows/release.yml` then does the rest:
+
+- **version** works out the tag and checks it looks like `1.8.0`.
+- **bundle** runs the test suite, builds the zip, fails if anything unexpected slipped in, installs the zip in a clean runner and runs `ppt-fill --version`.
+- **windows** builds the executable twice with Nuitka, once per architecture (`x64`, `x86`), then smoke tests each one by listing fields and filling the demo deck.
+- **publish** collects all three files and creates the GitHub release with notes that explain how to run them.
 
 To release without pushing a tag by hand, run the workflow from the Actions tab with the version as the input; it creates the `v` tag for you. Tick `draft` to review the release before it goes out.
 

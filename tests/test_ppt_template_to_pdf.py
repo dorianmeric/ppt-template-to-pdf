@@ -634,7 +634,7 @@ def test_legacy_template_is_converted_and_cleaned_up(tmp_path: Path, monkeypatch
         target.write_bytes(real_deck.read_bytes())
 
     monkeypatch.setattr(subject, "convert_with_powerpoint", fake_convert)
-    monkeypatch.setattr(subject, "find_spec", lambda name: object())
+    monkeypatch.setattr(subject, "pywin32_available", lambda: True)
     with subject.usable_template(legacy, quiet()) as template_path:
         assert template_path != legacy
         assert template_path.suffix == ".pptx"
@@ -647,7 +647,7 @@ def test_legacy_template_is_converted_and_cleaned_up(tmp_path: Path, monkeypatch
 def test_legacy_template_without_powerpoint_explains_the_fix(tmp_path: Path, monkeypatch) -> None:
     legacy = tmp_path / "Template.ppt"
     legacy.write_bytes(b"binary stub")
-    monkeypatch.setattr(subject, "find_spec", lambda name: None)
+    monkeypatch.setattr(subject, "pywin32_available", lambda: False)
     with pytest.raises(subject.InputError) as info:
         with subject.usable_template(legacy, quiet()):
             pass
@@ -660,7 +660,7 @@ def test_legacy_template_without_powerpoint_exits_two(tmp_path: Path, monkeypatc
     legacy = tmp_path / "Template.ppt"
     legacy.write_bytes(b"binary stub")
     data = write_data(tmp_path, "A: b\n")
-    monkeypatch.setattr(subject, "find_spec", lambda name: None)
+    monkeypatch.setattr(subject, "pywin32_available", lambda: False)
     assert subject.main([str(legacy), str(data), "--no-pdf", "-q"]) == 2
 
 
@@ -833,6 +833,21 @@ def test_reporter_flushes_each_line(monkeypatch) -> None:
     subject.Reporter().info("progress")
     assert recorded["args"] == ("progress",)
     assert recorded["kwargs"]["flush"] is True
+
+
+def test_pywin32_check_uses_a_real_import(monkeypatch) -> None:
+    """A frozen build has the modules embedded, so the check must try to import."""
+    import builtins
+
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("win32com"):
+            raise ImportError(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert subject.pywin32_available() is False
 
 
 def test_no_pdf_writes_only_pptx(tmp_path: Path) -> None:

@@ -19,7 +19,6 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dt_time, timezone
 from html.parser import HTMLParser
-from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional, Sequence
 
@@ -32,7 +31,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 PP_SAVE_AS_PDF = 32
 PP_SAVE_AS_OPEN_XML_PRESENTATION = 24
@@ -1266,13 +1265,16 @@ def lint_yaml_text(yaml_text: str, yaml_path: Path) -> None:
             if rewrite is not None
             else "    Wrap the value in single quotes, or use a '|' block value.\n"
         )
+        # Taken out of the f-string: Python 3.11 cannot hold a backslash inside an
+        # f-string expression, and the project still supports 3.10 and 3.11.
+        truncated = after.split('"')[0].split()[0]
         raise InputError(
             "YAML COMMENT ERROR\n"
             "==================\n"
             f"File:    {yaml_path}\n"
             f"Line:    {line_number}\n"
             f"Problem: YAML reads '#' as the start of a comment, so this value stops at "
-            f"{after.split('\"')[0].split()[0]!r}.\n\n"
+            f"{truncated!r}.\n\n"
             f"> {line_number:>3} | {line}\n\n"
             "How to fix it:\n"
             "Wrap the whole value in single quotes so the inner double quotes and the '#' survive.\n"
@@ -1641,6 +1643,23 @@ def powerpoint_save_as(
                 pass
 
 
+def pywin32_available() -> bool:
+    """True when pywin32 can actually be imported here.
+
+    A real import is used instead of importlib.util.find_spec because a frozen
+    build (Nuitka --onefile, PyInstaller) embeds win32com and pythoncom inside
+    the executable, where find_spec can report them as missing even though the
+    import works. Deciding on a failed import keeps the PDF and legacy .ppt
+    paths working in the pre-built .exe, while a plain source checkout on a
+    machine without pywin32 still gets the friendly message.
+    """
+    try:
+        import win32com.client  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def convert_with_powerpoint(
     source_path: Path,
     target_path: Path,
@@ -1685,7 +1704,7 @@ def usable_template(template_path: Path, reporter: Reporter) -> Iterator[Path]:
     if template_path.suffix.lower() not in LEGACY_TEMPLATE_SUFFIXES:
         yield template_path
         return
-    if sys.platform != "win32" or find_spec("win32com") is None:
+    if sys.platform != "win32" or not pywin32_available():
         raise InputError(LEGACY_TEMPLATE_HINT)
     with tempfile.TemporaryDirectory(prefix="ppt-template-to-pdf-") as work_dir:
         converted_path = Path(work_dir) / f"{template_path.stem}.pptx"
@@ -1705,7 +1724,7 @@ def build_job(arguments: argparse.Namespace) -> Job:
     """Validate the command line and turn it into a job."""
     template = resolve_template(arguments.template)
     if template.suffix.lower() in LEGACY_TEMPLATE_SUFFIXES:
-        if sys.platform != "win32" or find_spec("win32com") is None:
+        if sys.platform != "win32" or not pywin32_available():
             raise InputError(LEGACY_TEMPLATE_HINT)
     if arguments.list_fields:
         return Job(template=template, output_dir=template.parent, list_fields=True)
@@ -1719,7 +1738,7 @@ def build_job(arguments: argparse.Namespace) -> Job:
     if export_pdf:
         if sys.platform != "win32":
             raise InputError("PDF export needs Windows. Add --no-pdf to create only the PPTX file.")
-        if find_spec("win32com") is None:
+        if not pywin32_available():
             raise InputError(
                 "PDF export needs pywin32. Install it with: python -m pip install pywin32. "
                 "Add --no-pdf to create only the PPTX file."
