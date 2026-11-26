@@ -138,6 +138,29 @@ Pass `--overwrite` to replace the earlier files instead.
 
 ## Install
 
+The script checks its dependencies before it imports them, so a missing package is a message and an offer, not a traceback:
+
+```
+$ python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"
+This script needs Python packages that are not installed:
+  - python-pptx>=1.0.2  (import name: pptx)
+  - PyYAML>=6.0.4  (import name: yaml)
+
+Python:  C:\Python313\python.exe
+Command: "C:\Python313\python.exe" -m pip install "python-pptx>=1.0.2" "PyYAML>=6.0.4"
+Install now into C:\Python313\python.exe? [y/N]: y
+```
+
+Answering `y` installs into the interpreter that is running the script and continues. When stdin is not a terminal (CI, cron, a pipe), it prints the command, installs nothing and exits with code 1 instead of waiting for an answer.
+
+The file also carries a [PEP 723](https://peps.python.org/pep-0723/) block, so a runner can resolve everything by itself — no virtualenv, no pip step:
+
+```
+uv run ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"
+```
+
+Or install the packages yourself:
+
 ```
 python -m pip install -r requirements.txt
 ```
@@ -148,7 +171,7 @@ Or install the three packages directly:
 python -m pip install python-pptx PyYAML pywin32
 ```
 
-`requirements.txt` marks `pywin32` as Windows-only, so the same file works on Linux and macOS.
+`requirements.txt` marks `pywin32` as Windows-only, so the same file works on Linux and macOS. The `pip install` line in the startup check and the PEP 723 block carry the same three requirements: `python-pptx`, `PyYAML`, and `pywin32` on Windows only (`win32com`). Pre-built executables skip the check, because they carry their packages inside.
 
 Known working versions:
 

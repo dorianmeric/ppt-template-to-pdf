@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -199,6 +200,173 @@ def test_json_html_value_is_parsed_as_formatting(tmp_path: Path) -> None:
     assert subject.load_json_data(path) == {"TITLE": '<font color="#C00000">red</font>'}
     paragraphs = subject.value_to_paragraph_definitions("<b>bold</b>", "JSON 'TITLE'")
     assert paragraphs[0]["runs"][0]["bold"] is True
+
+
+# --- dependency guard ---------------------------------------------------
+
+REQUIREMENTS_BLOCK = re.compile(r"^# /// script\n(?P<body>(?:^#.*\n)*?)^# ///$", re.MULTILINE)
+
+
+def third_party_imports(source: str) -> set[str]:
+    """Top-level module names imported anywhere in a script, minus the standard library."""
+    import ast
+
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+    return {name for name in names if name not in sys.stdlib_module_names and name != "__future__"}
+
+
+def test_every_third_party_import_is_mapped_to_a_package() -> None:
+    """A new import must not sneak in without a PyPI name for the guard."""
+    source = Path("ppt_template_to_pdf.py").read_text(encoding="utf-8")
+    mapped = set(subject.REQUIRED_MODULES) | set(subject.WINDOWS_REQUIRED_MODULES)
+    assert third_party_imports(source) == mapped
+
+
+def test_mapping_uses_the_real_pypi_names() -> None:
+    assert subject.REQUIRED_MODULES["pptx"].startswith("python-pptx")
+    assert subject.REQUIRED_MODULES["yaml"].startswith("PyYAML")
+    assert subject.WINDOWS_REQUIRED_MODULES["win32com"].startswith("pywin32")
+
+
+def test_required_modules_follow_the_platform(monkeypatch) -> None:
+    monkeypatch.setattr(subject.sys, "platform", "linux")
+    assert "win32com" not in subject.required_modules()
+    monkeypatch.setattr(subject.sys, "platform", "win32")
+    assert "win32com" in subject.required_modules()
+
+
+def test_pep723_block_declares_the_same_dependencies() -> None:
+    source = Path("ppt_template_to_pdf.py").read_text(encoding="utf-8")
+    match = REQUIREMENTS_BLOCK.search(source)
+    assert match, "the PEP 723 block is missing from the top of the script"
+    # The block is TOML once the comment markers are stripped, so parse it as TOML
+    # rather than comparing strings.
+    body = "\n".join(
+        line[2:] if line.startswith("# ") else line.lstrip("#")
+        for line in match.group("body").splitlines()
+    )
+    metadata = tomllib.loads(body)
+    assert metadata["requires-python"] == ">=3.10"
+    dependencies = metadata["dependencies"]
+
+    # pyproject.toml is what pip and uv use for an installed copy; the inline block
+    # must not drift away from it.
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert set(dependencies) == set(project["project"]["dependencies"])
+
+    for requirement in subject.REQUIRED_MODULES.values():
+        assert requirement in dependencies, f"{requirement} is missing from the PEP 723 block"
+    for requirement in subject.WINDOWS_REQUIRED_MODULES.values():
+        assert any(dep.startswith(requirement) for dep in dependencies), (
+            f"{requirement} is missing from the PEP 723 block"
+        )
+
+
+def test_guard_is_skipped_in_a_frozen_build(monkeypatch) -> None:
+    monkeypatch.setattr(subject, "running_frozen", lambda: True)
+    monkeypatch.setattr(
+        subject.importlib.util, "find_spec", lambda name: pytest.fail("probed a module")
+    )
+    subject.ensure_dependencies()
+
+
+def test_guard_says_nothing_when_everything_is_installed(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(subject, "running_frozen", lambda: False)
+    monkeypatch.setattr(subject.importlib.util, "find_spec", lambda name: object())
+    subject.ensure_dependencies()
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+def test_guard_exits_with_the_command_when_not_interactive(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(subject, "running_frozen", lambda: False)
+    monkeypatch.setattr(subject.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(subject.sys.stdin, "isatty", lambda: False, raising=False)
+
+    with pytest.raises(SystemExit) as info:
+        subject.ensure_dependencies()
+    assert info.value.code == 1
+
+    errors = capsys.readouterr().err
+    assert "python-pptx" in errors and "PyYAML" in errors
+    requirements = subject.required_modules()
+    packages = " ".join(f'"{requirements[module]}"' for module in sorted(requirements))
+    expected = f'"{subject.sys.executable}" -m pip install {packages}'
+    assert expected in errors
+    assert "nothing was installed" in errors.lower()
+
+
+def test_guard_installs_when_the_user_says_yes(monkeypatch, capsys) -> None:
+    calls: list[list[str]] = []
+    prompts: list[str] = []
+
+    def fake_input(prompt: str = "") -> str:
+        prompts.append(prompt)
+        return "y"
+
+    monkeypatch.setattr(subject, "running_frozen", lambda: False)
+    monkeypatch.setattr(subject.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(subject.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(subject.importlib, "invalidate_caches", lambda: calls.append(["invalidate"]))
+    monkeypatch.setattr(subject.subprocess, "run", lambda command, check: calls.append(command))
+
+    subject.ensure_dependencies()
+
+    assert prompts == [f"Install now into {subject.sys.executable}? [y/N]: "]
+    assert calls[0][1:4] == ["-m", "pip", "install"]
+    assert "python-pptx>=1.0.2" in calls[0]
+    assert calls[-1] == ["invalidate"]
+    assert "Installing" in capsys.readouterr().out
+
+
+def test_guard_respects_no(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(subject, "running_frozen", lambda: False)
+    monkeypatch.setattr(subject.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(subject.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    monkeypatch.setattr(
+        subject.subprocess, "run", lambda *a, **k: pytest.fail("installed anyway")
+    )
+    with pytest.raises(SystemExit) as info:
+        subject.ensure_dependencies()
+    assert info.value.code == 1
+    assert "Nothing was installed" in capsys.readouterr().err
+
+
+def test_guard_survives_eof(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(subject, "running_frozen", lambda: False)
+    monkeypatch.setattr(subject.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(subject.sys.stdin, "isatty", lambda: True, raising=False)
+
+    def raise_eof(prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", raise_eof)
+    with pytest.raises(SystemExit) as info:
+        subject.ensure_dependencies()
+    assert info.value.code == 1
+
+
+def test_guard_reports_a_failed_pip_install(monkeypatch, capsys) -> None:
+    def fail(command, check):
+        raise subject.subprocess.CalledProcessError(2, command)
+
+    monkeypatch.setattr(subject, "running_frozen", lambda: False)
+    monkeypatch.setattr(subject.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(subject.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "yes")
+    monkeypatch.setattr(subject.subprocess, "run", fail)
+
+    with pytest.raises(SystemExit) as info:
+        subject.ensure_dependencies()
+    assert info.value.code == 1
+    assert "pip install failed with exit code 2" in capsys.readouterr().err
 
 
 # --- document properties ------------------------------------------------

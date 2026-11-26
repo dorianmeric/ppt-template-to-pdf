@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "python-pptx>=1.0.2",
+#     "PyYAML>=6.0.4",
+#     "pywin32>=312; sys_platform == 'win32'",
+# ]
+# ///
 """Fill a PowerPoint template from YAML or JSON and optionally export the result to PDF.
+
+The PEP 723 block above lets a runner resolve the dependencies by itself:
+
+    uv run ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"
+
+A plain ``python ppt_template_to_pdf.py`` ignores the block and relies on the
+guard below, which says what is missing and offers to install it.
 
 See README.md for the data file syntax, the template naming conventions, and
 the list of error messages.
@@ -9,8 +24,11 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import importlib
+import importlib.util
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -21,6 +39,118 @@ from datetime import date, datetime, time as dt_time, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional, Sequence
+
+# --- Dependency guard -----------------------------------------------------
+#
+# Everything above this point is standard library on purpose: the guard has to
+# run before the third-party imports below, or Python fails first with a bare
+# ModuleNotFoundError and no advice.
+#
+# Each third-party module the script imports, including the ones imported inside
+# functions, is mapped to its PyPI package. The values drive the pip command and
+# match the PEP 723 block at the top of the file; a test re-scans this file and
+# fails when a new third-party import is not listed here.
+
+REQUIRED_MODULES: dict[str, str] = {
+    "pptx": "python-pptx>=1.0.2",
+    "yaml": "PyYAML>=6.0.4",
+}
+
+# pywin32 only exists on Windows, and so does the code that imports it.
+WINDOWS_REQUIRED_MODULES: dict[str, str] = {
+    "win32com": "pywin32>=312",
+}
+
+
+def required_modules() -> dict[str, str]:
+    """Every third-party module this run needs, mapped to its PyPI requirement."""
+    modules = dict(REQUIRED_MODULES)
+    if sys.platform == "win32":
+        modules.update(WINDOWS_REQUIRED_MODULES)
+    return modules
+
+
+def running_frozen() -> bool:
+    """True inside a Nuitka or PyInstaller build, where the packages are embedded.
+
+    PyInstaller sets sys.frozen; Nuitka marks each compiled module with
+    __compiled__, which may live in this module or in __main__. All three are
+    checked because a frozen binary must never be told to pip install anything.
+    """
+    if getattr(sys, "frozen", False):
+        return True
+    if "__compiled__" in globals():
+        return True
+    return getattr(sys.modules.get("__main__"), "__compiled__", None) is not None
+
+
+def ensure_dependencies() -> None:
+    """Stop early, with a readable message, when a third-party package is missing.
+
+    A frozen executable carries its packages, so the check is skipped there.
+    Otherwise every required module is checked in one pass with find_spec, so
+    the user sees one list and one install command instead of the first failed
+    import. Non-interactive runs (CI, cron, a pipe) never prompt: they print the
+    command to copy and exit with code 1. Interactive runs may install on the
+    spot, and the import caches are refreshed so the imports below work without
+    a restart.
+    """
+    if running_frozen():
+        return
+
+    requirements = required_modules()
+    missing = [
+        module for module in sorted(requirements) if importlib.util.find_spec(module) is None
+    ]
+    if not missing:
+        return
+
+    packages = [requirements[module] for module in missing]
+    # Quote every requirement: pip accepts 'python-pptx>=1.0.2', but a shell reads
+    # the '>' as a redirection, so the printed command has to carry the quotes.
+    quoted = " ".join(f'"{package}"' for package in packages)
+    command = f'"{sys.executable}" -m pip install {quoted}'
+    listed = "\n".join(f"  - {requirements[module]}  (import name: {module})" for module in missing)
+    print(
+        "This script needs Python packages that are not installed:\n"
+        f"{listed}\n\n"
+        f"Python:  {sys.executable}\n"
+        f"Command: {command}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    if not sys.stdin.isatty():
+        # Never block a scheduled or piped run waiting for an answer nobody sees.
+        print("Not running interactively, so nothing was installed.", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        answer = input(f"Install now into {sys.executable}? [y/N]: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nNothing was installed.", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    if answer.strip().lower() not in {"y", "yes"}:
+        print("Nothing was installed. Run the command above when you are ready.", file=sys.stderr)
+        raise SystemExit(1)
+
+    print(f"Installing {', '.join(packages)} ...", flush=True)
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install", *packages], check=True)
+    except subprocess.CalledProcessError as error:
+        print(
+            f"pip install failed with exit code {error.returncode}. "
+            "Run the command above in a terminal to see the full output.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+
+    # The new files are on disk now; drop cached finder state so the imports see them.
+    importlib.invalidate_caches()
+
+
+ensure_dependencies()
 
 import yaml
 from pptx import Presentation
@@ -1651,7 +1781,8 @@ def pywin32_available() -> bool:
     the executable, where find_spec can report them as missing even though the
     import works. Deciding on a failed import keeps the PDF and legacy .ppt
     paths working in the pre-built .exe, while a plain source checkout on a
-    machine without pywin32 still gets the friendly message.
+    machine without pywin32 still gets the friendly message from
+    ensure_dependencies, which runs before the first third-party import.
     """
     try:
         import win32com.client  # noqa: F401
