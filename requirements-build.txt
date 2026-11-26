@@ -1,0 +1,8 @@
+# Requirements for building the release binaries locally with Nuitka.
+#
+# The version matches the one the release workflow passes to Nuitka-Action, so a
+# local build produces the same binary as CI. Bump both together.
+#
+#     python -m pip install -r requirements-build.txt
+#     python tools/make_github_release.py
+nuitka==4.4

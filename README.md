@@ -832,10 +832,24 @@ Tests, the `assets/` folder (screenshots, logo, demo template), and `requirement
 Build the same zip locally:
 
 ```
-python tools/make_release_zip.py
+python tools/make_github_release.py --zip-only
 ```
 
 It writes `dist/ppt-template-to-pdf-<version>.zip`, reads the version from `pyproject.toml`, and refuses to build when that version and `__version__` in the script disagree.
+
+The same script also builds the binary for the machine it runs on, so a maintainer can produce a full set of assets for one platform in one step:
+
+```
+python -m pip install -r requirements.txt -r requirements-build.txt
+python tools/make_github_release.py
+```
+
+```
+dist/ppt-template-to-pdf-1.9.1.zip
+dist/ppt-fill-1.9.1-windows-x64.exe
+```
+
+It calls Nuitka with the same options the workflow passes to Nuitka-Action, names the binary the way the released asset is named, and runs `--version` against it before reporting it. Nuitka cannot cross-compile, so each platform and architecture has to run it on its own machine; `--binary-only` skips the zip when that is all you want.
 
 Cut a release by pushing a tag that matches the version:
 
@@ -864,7 +878,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The tests cover YAML and JSON loading, the HTML parser, matching, document properties, and PPTX writing, plus the release zip builder. They do not need PowerPoint. PDF export is checked by hand.
+The tests cover YAML and JSON loading, the HTML parser, matching, document properties, and PPTX writing, plus the release builder (the zip, the asset names, and the Nuitka command line). They do not need PowerPoint. PDF export is checked by hand.
 
 ## License
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import sys
 import zipfile
 from pathlib import Path
 
@@ -771,9 +772,9 @@ def test_dry_run_reports_the_properties_it_would_set(tmp_path: Path, capsys) -> 
 
 
 def load_release_tool():
-    """Import tools/make_release_zip.py, which is not on the pytest path."""
-    path = Path(__file__).resolve().parent.parent / "tools" / "make_release_zip.py"
-    spec = importlib.util.spec_from_file_location("make_release_zip", path)
+    """Import tools/make_github_release.py, which is not on the pytest path."""
+    path = Path(__file__).resolve().parent.parent / "tools" / "make_github_release.py"
+    spec = importlib.util.spec_from_file_location("make_github_release", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -809,9 +810,120 @@ def test_release_zip_versions_must_agree(tmp_path: Path) -> None:
 def test_release_zip_builds_for_the_current_version(tmp_path: Path, capsys) -> None:
     tool = load_release_tool()
     version = project_version(tool)
-    assert tool.main(["--expect-version", version, "--output-dir", str(tmp_path)]) == 0
+    arguments = ["--zip-only", "--expect-version", version, "--output-dir", str(tmp_path)]
+    assert tool.main(arguments) == 0
     assert (tmp_path / f"ppt-template-to-pdf-{version}.zip").is_file()
     assert f"contains ppt-template-to-pdf-{version}/README.md" in capsys.readouterr().out
+
+
+def test_host_target_is_a_known_pair() -> None:
+    tool = load_release_tool()
+    os_slug, arch = tool.host_target()
+    assert os_slug in {"windows", "macos", "linux"}
+    assert arch in {"x64", "x86", "arm64", "x86_64", "aarch64"}
+
+
+@pytest.mark.parametrize(
+    "os_slug,arch,expected",
+    [
+        ("windows", "x64", "ppt-fill-1.9.1-windows-x64.exe"),
+        ("windows", "x86", "ppt-fill-1.9.1-windows-x86.exe"),
+        ("macos", "arm64", "ppt-fill-1.9.1-macos-arm64"),
+        ("macos", "x86_64", "ppt-fill-1.9.1-macos-x86_64"),
+        ("linux", "x86_64", "ppt-fill-1.9.1-linux-x86_64"),
+    ],
+)
+def test_binary_names_match_the_published_assets(os_slug: str, arch: str, expected: str) -> None:
+    tool = load_release_tool()
+    assert tool.release_binary_name("1.9.1", os_slug, arch) == expected
+
+
+def test_nuitka_command_mirrors_the_workflow(tmp_path: Path) -> None:
+    tool = load_release_tool()
+
+    windows = tool.nuitka_command("1.9.1", "windows", "x64", tmp_path)
+    assert windows[:3] == [sys.executable, "-m", "nuitka"]
+    assert "--onefile" in windows
+    assert "--output-filename=ppt-fill-1.9.1-windows-x64.exe" in windows
+    assert "--windows-console-mode=force" in windows
+    assert "--include-package=win32com" in windows
+    assert "--file-version=1.9.1" in windows
+    assert windows[-1].endswith("ppt_template_to_pdf.py")
+
+    linux = tool.nuitka_command("1.9.1", "linux", "x86_64", tmp_path)
+    assert "--output-filename=ppt-fill-1.9.1-linux-x86_64" in linux
+    assert not any("win32com" in part or "windows-" in part for part in linux)
+
+
+def test_binary_build_runs_nuitka_then_the_binary(tmp_path: Path, monkeypatch) -> None:
+    tool = load_release_tool()
+    binary = tmp_path / tool.release_binary_name("1.9.1", *tool.host_target())
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, stdout: str = "") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command))
+        if "nuitka" in command:
+            binary.write_bytes(b"fake binary")
+            return Result()
+        return Result(stdout="ppt_template_to_pdf 1.9.1\n")
+
+    monkeypatch.setattr(tool.subprocess, "run", fake_run)
+    monkeypatch.setattr(tool, "find_spec", lambda name: object())
+
+    built = tool.build_binary("1.9.1", tmp_path)
+    assert built == binary
+    assert calls[0][:3] == [sys.executable, "-m", "nuitka"]
+    assert calls[1][0] == str(binary)
+
+
+def test_binary_build_fails_when_the_binary_is_wrong(tmp_path: Path, monkeypatch) -> None:
+    tool = load_release_tool()
+    binary = tmp_path / tool.release_binary_name("1.9.1", *tool.host_target())
+
+    class Result:
+        def __init__(self, stdout: str = "") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(command, **kwargs):
+        if "nuitka" in command:
+            binary.write_bytes(b"fake binary")
+            return Result()
+        return Result(stdout="ppt_template_to_pdf 0.0.0\n")
+
+    monkeypatch.setattr(tool.subprocess, "run", fake_run)
+    monkeypatch.setattr(tool, "find_spec", lambda name: object())
+    with pytest.raises(SystemExit) as info:
+        tool.build_binary("1.9.1", tmp_path)
+    assert "did not report version" in str(info.value)
+
+
+def test_zip_only_skips_the_binary(tmp_path: Path, monkeypatch) -> None:
+    tool = load_release_tool()
+    monkeypatch.setattr(tool, "build_binary", lambda *a, **k: pytest.fail("built a binary"))
+    version = project_version(tool)
+    assert tool.main(["--zip-only", "--output-dir", str(tmp_path)]) == 0
+    assert (tmp_path / f"ppt-template-to-pdf-{version}.zip").is_file()
+
+
+def test_binary_only_skips_the_zip(tmp_path: Path, monkeypatch) -> None:
+    tool = load_release_tool()
+
+    def fake_build_binary(version, output_dir):
+        path = output_dir / "binary"
+        path.write_bytes(b"fake")
+        return path
+
+    monkeypatch.setattr(tool, "build_archive", lambda *a, **k: pytest.fail("built the zip"))
+    monkeypatch.setattr(tool, "build_binary", fake_build_binary)
+    assert tool.main(["--binary-only", "--output-dir", str(tmp_path)]) == 0
 
 
 def test_script_and_pyproject_versions_match() -> None:

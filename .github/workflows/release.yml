@@ -92,7 +92,9 @@ jobs:
       - name: Build the zip
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        run: python tools/make_release_zip.py --expect-version "$VERSION"
+        # The binaries in this workflow are built by Nuitka-Action on their own
+        # runners, so this job only needs the zip.
+        run: python tools/make_github_release.py --zip-only --expect-version "$VERSION"
 
       - name: Check the zip holds only the release files
         env:
