@@ -18,6 +18,9 @@ People find this repo looking for:
 - **how to update PowerPoint in Python** without losing the template's design
 - how to do a **mail merge for PowerPoint** (`{{PLACEHOLDER}}` → real values)
 - how to **fill a PPTX template from JSON, YAML, Excel, or a database**
+- how to **update slide master and layout placeholders** in a PowerPoint template
+- how to **replace the same placeholder everywhere** in a deck, not just on the first slide
+- how to **set the PDF title and metadata** of an exported deck
 - how to **generate PowerPoint slides programmatically** and ship them as PDF
 
 That is exactly what this does. No PowerPoint add-in, no VBA, no Office 365 subscription on the build machine (except for the optional PDF/legacy-file step).
@@ -54,11 +57,13 @@ Template - Deal data - 2026-11-26.pdf
   - [Prepare the template](#prepare-the-template)
     - [Method 1 (recommended): shape names](#method-1-recommended-shape-names)
     - [Method 2: tokens in the text](#method-2-tokens-in-the-text)
+    - [Method 3: on a slide layout or the slide master](#method-3-on-a-slide-layout-or-the-slide-master)
     - [Matching rules](#matching-rules)
   - [HTML inside YAML or JSON values](#html-inside-yaml-or-json-values)
   - [Pure YAML format](#pure-yaml-format)
   - [JSON data files](#json-data-files)
     - [Converting between YAML and JSON](#converting-between-yaml-and-json)
+  - [Document properties](#document-properties)
   - [Use it from Python](#use-it-from-python)
   - [Troubleshooting](#troubleshooting)
   - [FAQ: update PowerPoint with Python](#faq-update-powerpoint-with-python)
@@ -71,9 +76,11 @@ Template - Deal data - 2026-11-26.pdf
 
 - Opens a template with `python-pptx`.
 - Reads a YAML or JSON file that maps field IDs to content.
-- Finds every matching text box in the template and replaces its text.
+- Searches every text shape on every slide, every slide layout, and every slide master, including shapes inside groups.
+- Finds **every** matching text box and replaces its text, so a field that appears five times is filled five times, not only at the first hit.
 - Keeps the template's paragraph and character formatting as the default look.
 - Saves a new `.pptx` file. The template file is never modified.
+- Sets document properties (title, subject, author, keywords, dates) from a `PROPERTIES` block, which is what PowerPoint and the exported PDF show as metadata.
 - Converts a legacy `.ppt` or `.pot` template to `.pptx` first, with the installed PowerPoint.
 - Exports the new `.pptx` to PDF with the installed desktop PowerPoint. Use `--no-pdf` to skip this step.
 
@@ -207,18 +214,25 @@ Exit codes:
 
 ## Check the template first
 
-`--list-fields` prints every text shape, its slide, and its current text. It also shows which IDs are already written as `{{tokens}}`.
+`--list-fields` prints every fillable text shape, where it sits, and its current text. It also shows which IDs are already written as `{{tokens}}`.
 
 ```
 $ python ppt_template_to_pdf.py "Template.pptx" --list-fields
-Slide  Shape name         Match by       Text
-------------------------  -------------  --------------------
-1      CLIENT_NAME        shape name     {{CLIENT_NAME}}
-1      TRANSACTION_TITLE  shape name     Project ___ Financing
-3      TextBox 7          token SUMMARY  {{SUMMARY}}
+Where                  Shape name         Match by           Text
+---------------------  -----------------  -----------------  --------------------
+slide 1                CLIENT_NAME        shape name         Client name here
+slide 1                TRANSACTION_TITLE  shape name         Project ___ Financing
+slide 3                TextBox 7          token SUMMARY      {{SUMMARY}}
+master 'Office Theme'  TextBox 4          token FOOTER_TEXT  {{FOOTER_TEXT}}
 ```
 
 Use those names, or the IDs inside the braces, as top-level YAML or JSON keys.
+
+Layout and master shapes appear in that list only when they hold a token, because a stock template carries dozens of placeholder prompts there. Those shapes are still searched and can still be filled by shape name, which is why the list ends with a count of what it hid:
+
+```
+63 text shape(s) on layouts and masters hold no tokens and are not listed. They are searched too and can still be filled by shape name.
+```
 
 Preview a real run without writing files:
 
@@ -259,16 +273,27 @@ The screenshot uses `assets/screenshots/demo-template.pptx`. Open that file, sho
 
 In the screenshot the shape is still called `TextBox 7`, and the script fills it because its text contains `{{DISCLAIMER}}`.
 
+### Method 3: on a slide layout or the slide master
+
+A field does not have to live on a slide. Put the ID, as a shape name or as a `{{token}}`, on a slide layout or on the slide master, and the value reaches every slide that inherits from it:
+
+- A text box on the **slide master** appears on every slide of every layout, so the master is the place for a footer, a confidentiality line, or a company name that must show everywhere.
+- A text box on a **slide layout** reaches every slide that uses that layout.
+
+A slide placeholder only overrides the layout and master text when it has text of its own. Leave it empty and the filled value shows through. In PowerPoint terms, the same rules for inheritance apply whether the text sits on the slide, the layout, or the master, and the script treats those three places the same way.
+
 ### Matching rules
 
 - Shape names match exactly first.
 - Shape names then match case-insensitively, with a warning.
-- Tokens match with or without inner spaces, and are case-insensitive.
-- Shapes inside groups are searched.
-- One ID can match several shapes. Every match gets the same content.
-- If one shape is targeted by two IDs, the script warns and the later ID wins.
+- Tokens match with or without inner spaces, and are case-insensitive. `{{ SUMMARY }}`, `{{SUMMARY}}`, and `{{Summary}}` all match the ID `SUMMARY`.
+- Shapes inside groups are searched, at any depth.
+- **All three layers are searched:** slides, slide layouts, and slide masters. A field on a slide, on the layout it inherits from, and on the master is three matches.
+- **One ID can match several shapes, and every match is filled.** The same shape name on slides 2, 5, and 9, or the same token repeated in five boxes, is not a conflict: the value is written everywhere.
+- If one shape is targeted by two IDs, the script warns and the later ID in the data file wins.
+- A token match replaces the whole text frame, so `Prepared for {{ CLIENT_NAME }}` becomes just the value.
 
-Tables and pictures have no text frame, so the script skips them. Put the ID on a real text box.
+Tables, charts, and pictures have no text frame, so the script skips them. Put the ID on a real text box.
 
 Templates can be `.pptx`, `.pptm`, `.potx`, `.ppt`, or `.pot`. The output is always `.pptx`, so macros are dropped.
 
@@ -321,7 +346,7 @@ Use single quotes around a YAML value that contains HTML with double-quoted attr
 
 ## Pure YAML format
 
-The top level must be a mapping of `ID: content`. YAML and JSON use the same structure; only the punctuation differs.
+The top level must be a mapping of `ID: content`. YAML and JSON use the same structure; only the punctuation differs. The one reserved key is `PROPERTIES`, which sets document metadata instead of a shape — see [Document properties](#document-properties).
 
 A value can be:
 
@@ -474,6 +499,79 @@ JSON to YAML:
 python -c "import json, sys, yaml; yaml.safe_dump(json.load(open(sys.argv[1], encoding='utf-8')), open(sys.argv[2], 'w', encoding='utf-8'), allow_unicode=True, sort_keys=False)" "Deal data.json" "Deal data.yaml"
 ```
 
+## Document properties
+
+Shape fields are not the only target. A deck also carries **document properties**, and they are what a PDF shows under File > Properties > Description: Title, Author, Subject, Keywords, Created. This is why a PDF exported from PowerPoint opens with a document title such as `Q3 Results — Board Pack` instead of the file name.
+
+Set them in the data file with a `PROPERTIES` block. It sits next to the shape IDs and is never matched against shapes:
+
+```yaml
+CLIENT_NAME: "Example Energy Pte. Ltd."
+
+PROPERTIES:
+  title: "Q3 Results — Board Pack"
+  subject: "Quarterly review"
+  author: "Corporate Finance"
+  keywords: [q3, board pack, energy]
+  category: "Client reporting"
+  comments: "Generated from the deal tracker"
+  last_modified_by: "Deal team"
+  content_status: "Final"
+  version: "1.2"
+  revision: 3
+  created: "2026-09-30T09:00:00"
+```
+
+The same block in JSON:
+
+```json
+{
+  "CLIENT_NAME": "Example Energy Pte. Ltd.",
+  "PROPERTIES": {
+    "title": "Q3 Results — Board Pack",
+    "author": "Corporate Finance",
+    "keywords": ["q3", "board pack"]
+  }
+}
+```
+
+Run it exactly as before; the properties are written just before the PPTX is saved, so the PDF export already sees them:
+
+```
+python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"
+```
+
+Supported properties:
+
+| Property | Meaning | Value |
+| --- | --- | --- |
+| `title` | Document title. The one the PDF shows. | Text. |
+| `subject` | Subject line. | Text. |
+| `author` | Author or team. | Text. |
+| `keywords` | Tags for search and catalogues. | Text, or a list joined with commas. |
+| `comments` | Free notes. | Text. |
+| `category` | Category, for example `Client reporting`. | Text. |
+| `last_modified_by` | Name of the last editor. | Text. |
+| `content_status` | Status, for example `Draft` or `Final`. | Text. |
+| `identifier` | Reference or document number. | Text. |
+| `language` | Language tag, for example `en-GB`. | Text. |
+| `version` | Document version, kept as text. | Text or number. |
+| `revision` | Revision count. | Whole number, `0` or more. |
+| `created` | Creation timestamp. | ISO 8601 such as `2026-09-30T09:00:00`. |
+| `modified` | Last-saved timestamp. | ISO 8601. |
+| `last_printed` | Last-printed timestamp. | ISO 8601. |
+
+Details that save time:
+
+- Property names match case-insensitively and accept spaces, hyphens, or camelCase, so `Title`, `title`, and `TITLE` are the same key, and `Last Modified By`, `lastModifiedBy`, and `last_modified_by` are the same property.
+- An unknown property is rejected with a suggestion (`did you mean 'title'?`) instead of being silently dropped.
+- `keywords` may be a YAML/JSON list. It is joined with commas, because a PPTX stores keywords as one string.
+- Dates take an ISO 8601 string, a YAML date, or a Python datetime. A timezone is converted to UTC and dropped, because PPTX stores plain timestamps.
+- A data file that holds only a `PROPERTIES` block is valid. Nothing is filled, only the metadata is set.
+- `PROPERTIES` is a reserved key. A shape renamed to `PROPERTIES` cannot be filled, so avoid that name.
+- On export, desktop PowerPoint copies these values into the PDF `Info` dictionary and the XMP metadata, so `Title`, `Author`, `Subject`, and `Keywords` come out in the PDF as well.
+- Use `-v` to see each property that is written.
+
 ## Use it from Python
 
 The script is a normal importable module. Call `main()` with the same arguments you would pass on the command line:
@@ -529,6 +627,10 @@ If you need lower-level control, `python-pptx` is the library underneath and eve
 | `is empty` or `contains no IDs` | The data file has no entries. | Add at least one `ID: content` entry (or `"ID": content` in JSON). |
 | `is not valid UTF-8 text` | The file was saved in a legacy code page. | Save the data file as UTF-8. A UTF-8 BOM is fine. |
 | `the top level must be a mapping` | The data file is a list or a single value. | Start the file with `ID: value` lines at column zero, or one JSON `{ ... }` object. |
+| `PROPERTIES must be a mapping` | The `PROPERTIES` key holds a string or a list instead of `property: value` lines. | Indent the properties under the key, or use a JSON object. |
+| `unknown document property` | A property name is misspelled or not supported. | Use a suggested name. The message lists every supported property. |
+| `must be an ISO 8601 date and time` | `created`, `modified`, or `last_printed` holds free text. | Use `2026-09-30T09:00:00`. |
+| `must be a whole number` | `revision` is not a number. | Use `3`, not `third`. |
 | `These YAML IDs were not found in the template` (or `These JSON IDs ...`) | Shape name differs from the data file key. The field is a table or a picture. | The message suggests close matches. Run `--list-fields` to copy the exact name. |
 | `JSON SYNTAX ERROR` with line and column | A trailing comma, a single-quoted or bare key, a `//` comment, or a raw line break inside a string. | Read the quoted line and the suggestion under it. JSON needs double quotes, no comments, no trailing commas. |
 | `JSON DUPLICATE KEY` | The same key appears twice in one object. | Remove the duplicate or rename one of them. |
@@ -548,6 +650,7 @@ If you need lower-level control, `python-pptx` is the library underneath and eve
 | `PDF export failed after 3 attempts` | PowerPoint kept rejecting the call. | Close every open Office window and run again. |
 | `Cannot write ...` | The output file is open, or the folder is read-only. | Close the file. Write to a folder you own. |
 | Output path is long warning | Windows path limit. | Use a short `-o` folder such as `C:\Out`. |
+| A field on a layout or the master changes the master, but one slide still shows the old text | That slide's placeholder holds its own text, so it overrides the layout and the master. | Delete the text inside the slide placeholder, or move the field onto the slide. |
 | Text overflows the box | The template box is too small. | Enlarge the box or enable autofit in the template. |
 | PDF fonts differ from the template | A template font is not installed on this machine. | Install the font, or save the template with an available font. |
 
@@ -591,8 +694,17 @@ Not currently. The script fills text boxes and text frames, including grouped sh
 **Can I fill dozens of fields at once?**
 Yes. One data file can hold every field for every slide. The IDs are matched across the whole presentation, including shapes inside groups.
 
+**How do I set the PDF title and metadata?**
+Add a `PROPERTIES` block to the data file with `title`, `subject`, `author`, and `keywords`. The values are written to the deck's document properties before the PDF export, so PowerPoint carries them into the PDF `Info` dictionary and XMP metadata. See [Document properties](#document-properties).
+
 **Can I choose the output file name?**
 Yes. `-n` / `--name "Q3 update"` writes `Q3 update.pptx` and `Q3 update.pdf` in the output folder. Without it the name is `<template> - <data> - <date>`, and `(2)`, `(3)` are added rather than overwriting an earlier file.
+
+**Does it work if the field is defined on the slide master or on a layout?**
+Yes. Slides, slide layouts, and slide masters are all searched. A field placed on the master is filled once and every slide that inherits it shows the value, which is how footers, confidentiality lines, and company names are handled. Placeholders on a slide only override the layout and master when they hold their own text, so leave them empty for inherited values.
+
+**What happens if the same field appears more than once in the deck?**
+Every occurrence is filled with the same value: the same shape name on several slides, the same token repeated in one text box or across slides, and a field that exists on both a slide and its layout. Nothing stops at the first match, and the verbose output lists each write.
 
 **Is there a way to check the template without running a real fill?**
 `--list-fields` lists every text shape and token, and `--dry-run -v` reports the planned matches and writes nothing.
@@ -612,7 +724,7 @@ If your input is a spreadsheet and your output is a set of branded decks plus PD
 
 ## Search terms
 
-Variables, placeholders, tokens, mail merge, templating, data merge, python-pptx wrapper, pptx template filler, PowerPoint automation, PowerPoint generation, PPTX to PDF, `.potx` template, `.pptm`, `python-pptx` text replacement, replace text in PowerPoint with Python, fill PowerPoint template from YAML, fill PowerPoint template from JSON, fill PPTX from an API response, PowerPoint template from JSON in Python, generate slides from JSON data, fill PowerPoint template from Excel, generate PowerPoint report in Python, dynamic PowerPoint decks, batch PowerPoint generation, PowerPoint CLI.
+Variables, placeholders, tokens, mail merge, templating, data merge, python-pptx wrapper, pptx template filler, PowerPoint automation, PowerPoint generation, PPTX to PDF, `.potx` template, `.pptm`, `python-pptx` text replacement, replace text in PowerPoint with Python, fill PowerPoint template from YAML, fill PowerPoint template from JSON, fill PPTX from an API response, PowerPoint template from JSON in Python, generate slides from JSON data, fill PowerPoint template from Excel, generate PowerPoint report in Python, dynamic PowerPoint decks, batch PowerPoint generation, PowerPoint CLI, slide master placeholders, edit slide layout text in Python, replace placeholder on every slide, fill every occurrence of a placeholder, set PowerPoint document properties in Python, set PDF title and author from Python, PDF metadata for PowerPoint export, python-pptx core properties, docProps title subject keywords.
 
 ## Run the tests
 
@@ -621,7 +733,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The tests cover YAML and JSON loading, the HTML parser, matching, and PPTX writing. They do not need PowerPoint. PDF export is checked by hand.
+The tests cover YAML and JSON loading, the HTML parser, matching, document properties, and PPTX writing. They do not need PowerPoint. PDF export is checked by hand.
 
 ## License
 

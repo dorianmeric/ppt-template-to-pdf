@@ -17,7 +17,7 @@ import time
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, time, timezone
 from html.parser import HTMLParser
 from importlib.util import find_spec
 from pathlib import Path
@@ -32,7 +32,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
 
-__version__ = "1.4.0"
+__version__ = "1.6.0"
 
 PP_SAVE_AS_PDF = 32
 PP_SAVE_AS_OPEN_XML_PRESENTATION = 24
@@ -60,6 +60,30 @@ RESERVED_OUTPUT_NAMES = {
     *(f"LPT{number}" for number in range(1, 10)),
 }
 OUTPUT_NAME_SUFFIXES = (".pptx", ".pdf")
+
+# The reserved key that carries document (core) properties instead of shape fields.
+PROPERTIES_KEY = "properties"
+TEXT_PROPERTY_NAMES = (
+    "author",
+    "category",
+    "comments",
+    "content_status",
+    "identifier",
+    "keywords",
+    "language",
+    "last_modified_by",
+    "subject",
+    "title",
+    "version",
+)
+DATE_PROPERTY_NAMES = ("created", "last_printed", "modified")
+INT_PROPERTY_NAMES = ("revision",)
+CORE_PROPERTY_NAMES = (*TEXT_PROPERTY_NAMES, *DATE_PROPERTY_NAMES, *INT_PROPERTY_NAMES)
+PROPERTY_ALIASES = {
+    "lastmodifiedby": "last_modified_by",
+    "contentstatus": "content_status",
+    "lastprinted": "last_printed",
+}
 
 PDF_UNAVAILABLE_HINT = (
     "PDF export needs Windows, desktop PowerPoint, and pywin32. "
@@ -169,9 +193,18 @@ class Job:
 
 @dataclass
 class Field:
-    """One text shape found in the template."""
+    """One text shape the fill can reach.
 
-    slide: int
+    A field is a text frame, wherever PowerPoint keeps it: on a slide, on a
+    slide layout, or on a slide master. ``region`` says which of the three, and
+    ``where`` is a short label such as ``slide 3`` or ``master 'Office Theme'``
+    that messages and --list-fields print. ``name`` is the shape name from the
+    Selection Pane, and ``text`` is what the shape itself holds, before any
+    inheritance from the layout or master is applied.
+    """
+
+    region: str
+    where: str
     shape: Any
     name: str
     text: str
@@ -685,21 +718,68 @@ def iter_shapes(shapes: Iterable[Any]) -> Iterator[Any]:
             yield from iter_shapes(shape.shapes)
 
 
+def iter_text_shapes(shapes: Iterable[Any]) -> Iterator[Any]:
+    """Yield every shape that holds text, including shapes inside groups."""
+    for shape in iter_shapes(shapes):
+        if getattr(shape, "has_text_frame", False):
+            yield shape
+
+
 def collect_fields(presentation: Presentation) -> list[Field]:
-    """Collect every text shape in the presentation with its slide number."""
+    """Find every text shape a field can be written to, and label where it sits.
+
+    PowerPoint keeps text in three places, and the fill has to search all of
+    them, because a template author can put a field in any of them:
+
+    1. Slides, numbered the way PowerPoint numbers them.
+    2. Slide layouts, one collection per slide master. A slide that leaves its
+       placeholder empty inherits the text that the layout holds, so a field on
+       a layout fills once and appears on every slide that uses that layout.
+    3. Slide masters. Layouts inherit from the master the same way, so a field
+       on the master reaches every layout and every slide that does not
+       override it. This is where a logo caption, a footer, or a disclaimer that
+       must appear everywhere is usually placed.
+
+    Order is fixed and predictable: slides first, then the layouts of each
+    master, then that master itself. Shapes inside groups are searched at any
+    depth, so grouping a text box to move it does not hide it from the fill.
+
+    A shape is returned once even when PowerPoint exposes it through more than
+    one collection, and only shapes with a text frame are returned. Tables,
+    charts, pictures, and media have no text frame; their text is not reachable
+    this way and is skipped.
+
+    Matching then happens on top of this list, so the same copy covers the whole
+    presentation: one ID can match many shapes at once (see resolve_plan), and a
+    shape found on a slide, its layout, and the master is filled everywhere it
+    appears.
+    """
     fields: list[Field] = []
-    for slide_number, slide in enumerate(presentation.slides, start=1):
-        for shape in iter_shapes(slide.shapes):
-            if not getattr(shape, "has_text_frame", False):
+    seen: set[int] = set()
+
+    def collect(shapes: Iterable[Any], region: str, where: str) -> None:
+        for shape in iter_text_shapes(shapes):
+            if id(shape) in seen:
                 continue
+            seen.add(id(shape))
             fields.append(
                 Field(
-                    slide=slide_number,
+                    region=region,
+                    where=where,
                     shape=shape,
                     name=(getattr(shape, "name", "") or "").strip(),
                     text=getattr(shape, "text", "") or "",
                 )
             )
+
+    for slide_number, slide in enumerate(presentation.slides, start=1):
+        collect(slide.shapes, "slide", f"slide {slide_number}")
+    for master in presentation.slide_masters:
+        master_name = (getattr(master, "name", "") or "").strip() or "unnamed master"
+        for layout in master.slide_layouts:
+            layout_name = (getattr(layout, "name", "") or "").strip() or "unnamed layout"
+            collect(layout.shapes, "layout", f"layout '{layout_name}'")
+        collect(master.shapes, "master", f"master '{master_name}'")
     return fields
 
 
@@ -709,7 +789,25 @@ def token_pattern(unique_id: str) -> re.Pattern[str]:
 
 
 def match_reason(field: Field, unique_id: str, pattern: re.Pattern[str]) -> Optional[str]:
-    """Return how a field matches an ID, or None when it does not match."""
+    """Decide how one shape answers one ID, or None when it does not match.
+
+    Three tests run in order, and the first one that passes wins, so an exact
+    shape name always beats a token that happens to sit in the same box:
+
+    1. The shape name equals the ID exactly. This is the setup to aim for:
+       rename the shape in Home > Arrange > Selection Pane, and the ID stays
+       the same however the visible text is worded later.
+    2. The shape name equals the ID ignoring case. The shape is filled, but the
+       caller warns, because PowerPoint can change the case during a rename and
+       the ID would then stop matching silently.
+    3. The shape text contains the token {{ID}}, written with or without inner
+       spaces and in any case, so {{ client_name }}, {{CLIENT_NAME}}, and
+       {{Client_Name}} all match the ID CLIENT_NAME. The token may sit anywhere
+       in the text; the whole text frame is replaced by the value.
+
+    The check is per shape, not per slide: a match is reported for every shape
+    that passes it, so a token repeated in five boxes produces five matches.
+    """
     key = unique_id.strip()
     if field.name == key:
         return "shape name"
@@ -726,7 +824,23 @@ def resolve_plan(
     reporter: Reporter,
     label: str = "YAML",
 ) -> MatchPlan:
-    """Match every data file ID against the template fields before anything is written."""
+    """Match every data file ID against every template field, before writing.
+
+    Each ID is compared with every field that collect_fields found: all slides,
+    all slide layouts, and all slide masters. Nothing is one-to-one:
+
+    - One ID can match many shapes. Every shape that passes match_reason is
+      added to the plan, so the same field repeated across slides, or present
+      on a slide and on the layout it inherits from, is filled everywhere at
+      once instead of only at the first hit. fill_presentation then writes the
+      value into each of them.
+    - Two IDs can claim the same shape, for example when the shape name matches
+      one ID and its text holds a token for another. The clash is reported, and
+      the ID that comes later in the data file wins, because it is applied last.
+
+    The plan is built before anything is written, so a typo in one ID stops the
+    run with exit code 3 instead of leaving a half-filled deck on disk.
+    """
     plan = MatchPlan()
     owners: dict[int, str] = {}
     for unique_id in data:
@@ -739,13 +853,13 @@ def resolve_plan(
             template_field.matched_by = reason
             if "insensitive" in reason:
                 reporter.warning(
-                    f"'{unique_id}' matched slide {template_field.slide} "
+                    f"'{unique_id}' matched {template_field.where} "
                     f"shape '{template_field.name}' by {reason}."
                 )
             previous = owners.get(id(template_field.shape))
             if previous is not None and previous != unique_id:
                 reporter.warning(
-                    f"slide {template_field.slide} shape '{template_field.name}' is targeted by "
+                    f"{template_field.where} shape '{template_field.name}' is targeted by "
                     f"'{previous}' and '{unique_id}'; '{unique_id}' wins."
                 )
             owners[id(template_field.shape)] = unique_id
@@ -782,41 +896,93 @@ def fill_presentation(
     reporter: Reporter,
     label: str = "YAML",
 ) -> None:
-    """Write the data file content into every matched field."""
+    """Write the data file content into every matched field.
+
+    Every match in the plan is written, not just the first one, so a field that
+    appears several times in the deck ends up with the same value in every
+    place: repeated tokens on one slide, the same shape name on slides 2, 5, and
+    9, a field on a layout shared by four slides, or a field on the slide
+    master that every slide inherits.
+
+    Each write replaces the whole text frame of that one shape with the parsed
+    content, so writing the same shape twice is harmless. Shapes that no ID
+    matched are left untouched, and their text is preserved exactly as the
+    template author wrote it.
+    """
     for unique_id, matched in plan.matches.items():
         for template_field in matched:
             reporter.detail(
-                f"  {unique_id} -> slide {template_field.slide} "
+                f"  {unique_id} -> {template_field.where} "
                 f"'{template_field.name}' ({template_field.matched_by})"
             )
             populate_text_frame(
                 template_field.shape.text_frame,
                 data[unique_id],
-                where=f"{label} '{unique_id}' (slide {template_field.slide}, shape '{template_field.name}')",
+                where=(
+                    f"{label} '{unique_id}' "
+                    f"({template_field.where}, shape '{template_field.name}')"
+                ),
             )
 
 
+def apply_document_properties(core_properties: Any, properties: dict[str, Any]) -> None:
+    """Write validated PROPERTIES values onto the presentation's core properties.
+
+    These are the fields PowerPoint shows under File > Info and writes into the
+    PDF metadata on export, so setting title, subject, author, and keywords here
+    is what makes the PDF show a real document title instead of the file name.
+    """
+    for name, value in properties.items():
+        setattr(core_properties, name, value)
+
+
 def print_field_list(fields: Sequence[Field]) -> None:
-    """Print every text shape so the user can build the data file."""
+    """Print the shapes that can be filled, with the name or token to use.
+
+    Slide shapes are always listed. Layout and master shapes are listed only
+    when they hold a token, because a stock template carries dozens of
+    placeholder prompts there and printing all of them would bury the fields
+    the user actually needs. Those shapes can still be filled by shape name.
+    """
     if not fields:
         print("No text shapes found in this presentation.")
         return
     rows = []
+    hidden = 0
     for template_field in fields:
         token = TOKEN_SCAN_PATTERN.search(template_field.text)
+        if template_field.region != "slide" and token is None:
+            hidden += 1
+            continue
         source = f"token {token.group(1).strip()}" if token else "shape name"
         text = " ".join(template_field.text.split())
         if len(text) > 60:
             text = text[:57] + "..."
         rows.append((template_field, source, text))
+    if not rows:
+        print("No fillable text shapes found in this presentation.")
+        return
+    where_width = max(len("Where"), *(len(template_field.where) for template_field, _, _ in rows))
     name_width = max(len("Shape name"), *(len(template_field.name) for template_field, _, _ in rows))
     source_width = max(len("Match by"), *(len(source) for _, source, _ in rows))
-    print(f"{'Slide':<7}{'Shape name':<{name_width}}  {'Match by':<{source_width}}  Text")
-    print(f"{'-' * 7}{'-' * name_width}  {'-' * source_width}  {'-' * 20}")
+    print(f"{'Where':<{where_width}}  {'Shape name':<{name_width}}  {'Match by':<{source_width}}  Text")
+    print(f"{'-' * where_width}  {'-' * name_width}  {'-' * source_width}  {'-' * 20}")
     for template_field, source, text in rows:
-        print(f"{template_field.slide:<7}{template_field.name:<{name_width}}  {source:<{source_width}}  {text}")
+        print(
+            f"{template_field.where:<{where_width}}  {template_field.name:<{name_width}}  "
+            f"{source:<{source_width}}  {text}"
+        )
     print()
+    if hidden:
+        print(
+            f"{hidden} text shape(s) on layouts and masters hold no tokens and are not listed. "
+            "They are searched too and can still be filled by shape name."
+        )
     print("Use these shape names, or the IDs inside {{braces}}, as top-level YAML or JSON keys.")
+    print(
+        "Document and PDF metadata is set with a PROPERTIES block, for example "
+        "PROPERTIES: {title: Q3 update, author: Deal team}."
+    )
 
 
 def read_data_text(data_path: Path) -> str:
@@ -851,6 +1017,124 @@ def normalise_data(loaded_data: Any, data_path: Path) -> dict[str, Any]:
     if not data:
         raise InputError(f"{data_path} contains no IDs.")
     return data
+
+
+def normalise_property_name(name: str) -> str:
+    """Map 'Last Modified By', 'lastModifiedBy', or 'LAST-MODIFIED-BY' to one name."""
+    cleaned = re.sub(r"[^0-9A-Za-z]+", "_", str(name).strip()).strip("_").lower()
+    return PROPERTY_ALIASES.get(cleaned, cleaned)
+
+
+def coerce_property_datetime(value: Any, name: str, where: str) -> datetime:
+    """Turn an ISO 8601 string, a date, or a datetime into a naive UTC datetime."""
+    example = "'2026-09-30T09:00:00'"
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime.combine(value, time.min)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise InputError(f"{where}: '{name}' must not be empty.")
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            raise InputError(
+                f"{where}: '{name}' must be an ISO 8601 date and time such as {example}, "
+                f"got {value!r}."
+            ) from None
+    else:
+        raise InputError(
+            f"{where}: '{name}' must be an ISO 8601 date and time such as {example}, "
+            f"got {type(value).__name__}."
+        )
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def coerce_property_value(name: str, value: Any, where: str) -> Any:
+    """Convert one PROPERTIES value into what python-pptx expects for that property.
+
+    Text properties become strings, so a number such as a version works without
+    quotes. Keywords may be a list, which is joined with commas. The three date
+    properties take an ISO 8601 string, a YAML date, or a datetime, and revision
+    takes a whole number.
+    """
+    if name in DATE_PROPERTY_NAMES:
+        return coerce_property_datetime(value, name, where)
+    if name in INT_PROPERTY_NAMES:
+        if isinstance(value, bool):
+            raise InputError(f"{where}: '{name}' must be a whole number, got {value!r}.")
+        try:
+            number = int(str(value).strip())
+        except (TypeError, ValueError):
+            raise InputError(f"{where}: '{name}' must be a whole number, got {value!r}.") from None
+        if number < 0:
+            raise InputError(f"{where}: '{name}' must be zero or more, got {value!r}.")
+        return number
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    raise InputError(
+        f"{where}: {type(value).__name__} is not a text value. Use text, a number, "
+        "or a list such as keywords: [q3, board]."
+    )
+
+
+def normalise_document_properties(properties: dict[str, Any]) -> dict[str, Any]:
+    """Validate the PROPERTIES block and convert each value for python-pptx.
+
+    Names are matched case-insensitively and accept spaces, hyphens, or the
+    camelCase that PowerPoint uses in its own UI, so ``Last Modified By``,
+    ``lastModifiedBy``, and ``last_modified_by`` all set the same property. An
+    unknown name is rejected with a suggestion rather than silently ignored.
+    """
+    if not properties:
+        return {}
+    unknown = [key for key in properties if normalise_property_name(key) not in CORE_PROPERTY_NAMES]
+    if unknown:
+        hints = []
+        for key in unknown:
+            normalised = normalise_property_name(key)
+            close = difflib.get_close_matches(normalised, CORE_PROPERTY_NAMES, n=1)
+            hints.append(f"'{key}'" + (f" (did you mean '{close[0]}'?)" if close else ""))
+        raise InputError(
+            f"PROPERTIES: unknown document property {', '.join(hints)}. "
+            f"Supported: {', '.join(CORE_PROPERTY_NAMES)}."
+        )
+    return {
+        normalise_property_name(key): coerce_property_value(
+            normalise_property_name(key), value, f"PROPERTIES '{key}'"
+        )
+        for key, value in properties.items()
+    }
+
+
+def split_document_properties(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Separate the reserved PROPERTIES block from the shape IDs.
+
+    The block is recognised by its key, in any case. It is never matched against
+    shapes, so the name PROPERTIES is reserved: a shape called PROPERTIES cannot
+    be filled. Everything else in the file keeps working as before, and a file
+    that holds only a PROPERTIES block is valid.
+    """
+    property_values: dict[str, Any] = {}
+    shape_data: dict[str, Any] = {}
+    for key, value in data.items():
+        if key.strip().casefold() == PROPERTIES_KEY:
+            if not isinstance(value, dict):
+                raise InputError(
+                    f"PROPERTIES must be a mapping of property names to values, "
+                    f"not {type(value).__name__}. For example: title, author, subject."
+                )
+            property_values = value
+        else:
+            shape_data[key] = value
+    return shape_data, property_values
 
 
 def load_yaml_data(yaml_path: Path) -> dict[str, Any]:
@@ -1451,10 +1735,12 @@ def run_job(job: Job, reporter: Reporter) -> int:
 
 
 def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
-    """Fill the template, save the PPTX, and export the PDF."""
+    """Fill the template, set document properties, save the PPTX, export PDF."""
     assert job.data is not None
-    data = load_data_file(job.data)
+    loaded = load_data_file(job.data)
     label = data_format_label(job.data)
+    data, property_block = split_document_properties(loaded)
+    properties = normalise_document_properties(property_block)
     presentation = open_presentation(template_path)
     fields = collect_fields(presentation)
     plan = resolve_plan(fields, data, reporter, label)
@@ -1462,8 +1748,15 @@ def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
         raise FieldMatchError(build_missing_message(plan.missing, fields, label))
     unfilled = [template_field for template_field in fields if not template_field.matched_by]
     for template_field in unfilled:
-        reporter.detail(f"  left unchanged: slide {template_field.slide} '{template_field.name}'")
+        if template_field.region == "slide":
+            reporter.detail(f"  left unchanged: {template_field.where} '{template_field.name}'")
+    inherited_unfilled = sum(1 for template_field in unfilled if template_field.region != "slide")
+    if inherited_unfilled:
+        reporter.detail(f"  {inherited_unfilled} unmatched layout and master text shape(s)")
     reporter.detail(f"  {len(plan.matches)} {label} ID(s) matched {plan.field_count} template field(s)")
+    for name, value in properties.items():
+        shown = value.isoformat() if isinstance(value, datetime) else value
+        reporter.detail(f"  document property {name} = {shown!r}")
     if job.dry_run:
         reporter.info(
             f"Dry run: {len(plan.matches)} {label} ID(s) matched {plan.field_count} template field(s). "
@@ -1476,6 +1769,7 @@ def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
         fill_presentation(plan, data, reporter, label)
     except ValueError as error:
         raise InputError(str(error)) from None
+    apply_document_properties(presentation.core_properties, properties)
     save_presentation(presentation, output_pptx)
     reporter.info(f"Created PPTX: {output_pptx}")
     if job.export_pdf:

@@ -197,6 +197,128 @@ def test_json_html_value_is_parsed_as_formatting(tmp_path: Path) -> None:
     assert paragraphs[0]["runs"][0]["bold"] is True
 
 
+# --- document properties ------------------------------------------------
+
+
+def test_properties_block_is_split_from_fields() -> None:
+    shape_data, properties = subject.split_document_properties(
+        {"TITLE": "Slide title", "PROPERTIES": {"title": "Deck title"}}
+    )
+    assert shape_data == {"TITLE": "Slide title"}
+    assert properties == {"title": "Deck title"}
+
+
+def test_properties_key_folds_case() -> None:
+    shape_data, properties = subject.split_document_properties(
+        {"Properties": {"Subject": "Quarterly review"}, "TITLE": "x"}
+    )
+    assert shape_data == {"TITLE": "x"}
+    assert properties == {"Subject": "Quarterly review"}
+
+
+def test_properties_block_must_be_a_mapping() -> None:
+    with pytest.raises(subject.InputError) as info:
+        subject.split_document_properties({"PROPERTIES": "title: Q3"})
+    assert "mapping" in str(info.value)
+
+
+@pytest.mark.parametrize(
+    "written,expected",
+    [
+        ("title", "title"),
+        ("Title", "title"),
+        ("SUBJECT", "subject"),
+        ("last modified by", "last_modified_by"),
+        ("lastModifiedBy", "last_modified_by"),
+        ("Last-Modified-By", "last_modified_by"),
+        ("contentStatus", "content_status"),
+        ("LastPrinted", "last_printed"),
+    ],
+)
+def test_property_names_are_normalised(written: str, expected: str) -> None:
+    assert subject.normalise_property_name(written) == expected
+
+
+def test_property_values_are_converted() -> None:
+    properties = subject.normalise_document_properties(
+        {
+            "title": "Q3 update",
+            "revision": "7",
+            "keywords": ["q3", "board", " "],
+            "created": "2026-09-30T09:00:00",
+            "version": 1.2,
+        }
+    )
+    assert properties["title"] == "Q3 update"
+    assert properties["revision"] == 7
+    assert properties["keywords"] == "q3, board"
+    assert properties["version"] == "1.2"
+    assert properties["created"].isoformat() == "2026-09-30T09:00:00"
+
+
+def test_unknown_property_is_rejected_with_a_suggestion() -> None:
+    with pytest.raises(subject.InputError) as info:
+        subject.normalise_document_properties({"titel": "Q3 update"})
+    message = str(info.value)
+    assert "unknown document property" in message
+    assert "did you mean 'title'" in message
+
+
+def test_bad_property_dates_are_rejected() -> None:
+    with pytest.raises(subject.InputError) as info:
+        subject.normalise_document_properties({"created": "last Tuesday"})
+    assert "ISO 8601" in str(info.value)
+
+
+def test_bad_revision_is_rejected() -> None:
+    with pytest.raises(subject.InputError):
+        subject.normalise_document_properties({"revision": "first"})
+
+
+def test_properties_are_written_to_the_pptx(tmp_path: Path) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_data(
+        tmp_path,
+        "CLIENT_NAME: Example\n"
+        "PROPERTIES:\n"
+        "  title: Q3 Results\n"
+        "  subject: Quarterly review\n"
+        "  author: Corporate Finance\n"
+        "  keywords: [q3, board pack]\n"
+        "  revision: 3\n"
+        "  created: 2026-09-30T09:00:00\n",
+    )
+    output = tmp_path / "out"
+    args = [str(template), str(data), "-o", str(output), "--no-pdf", "-q"]
+    assert subject.main(args) == 0
+
+    written = Presentation(str(next(output.glob("*.pptx"))))
+    assert written.core_properties.title == "Q3 Results"
+    assert written.core_properties.subject == "Quarterly review"
+    assert written.core_properties.author == "Corporate Finance"
+    assert written.core_properties.keywords == "q3, board pack"
+    assert written.core_properties.revision == 3
+    assert written.core_properties.created.isoformat() == "2026-09-30T09:00:00"
+
+
+def test_properties_only_file_writes_no_shape(tmp_path: Path) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_json_data(tmp_path, '{"PROPERTIES": {"title": "Only metadata"}}')
+    output = tmp_path / "out"
+    args = [str(template), str(data), "-o", str(output), "--no-pdf", "-q"]
+    assert subject.main(args) == 0
+
+    written = Presentation(str(next(output.glob("*.pptx"))))
+    assert written.core_properties.title == "Only metadata"
+    assert shape_named(written, "CLIENT_NAME").text_frame.text == "old client"
+
+
+def test_unknown_property_exits_two(tmp_path: Path) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_data(tmp_path, "PROPERTIES:\n  titel: Q3\n")
+    assert subject.main([str(template), str(data), "--no-pdf", "-q"]) == 2
+
+
 # --- value coercion -----------------------------------------------------
 
 
@@ -330,6 +452,91 @@ def test_duplicate_target_warns(tmp_path: Path) -> None:
     fields = subject.collect_fields(Presentation(str(template)))
     plan = subject.resolve_plan(fields, {"CLIENT_NAME": "a", "client_name": "b"}, quiet())
     assert plan.matches["CLIENT_NAME"][0] is plan.matches["client_name"][0]
+
+
+def test_collect_fields_covers_slides_layouts_and_masters(tmp_path: Path) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    fields = subject.collect_fields(Presentation(str(template)))
+    regions = {field.region for field in fields}
+    assert regions == {"slide", "layout", "master"}
+    assert any(field.where.startswith("slide ") for field in fields)
+    assert any(field.where.startswith("layout '") for field in fields)
+    assert any(field.where.startswith("master '") for field in fields)
+    assert len({id(field.shape) for field in fields}) == len(fields)
+
+
+def test_field_on_the_slide_master_is_filled() -> None:
+    presentation = Presentation()
+    master_title = presentation.slide_master.placeholders[0]
+    master_title.text_frame.text = "{{MASTER_TITLE}}"
+
+    data = {"MASTER_TITLE": "Every slide shows this"}
+    plan = subject.resolve_plan(subject.collect_fields(presentation), data, quiet())
+    assert plan.missing == []
+    assert [field.region for field in plan.matches["MASTER_TITLE"]] == ["master"]
+
+    subject.fill_presentation(plan, data, quiet())
+    assert master_title.text_frame.text == "Every slide shows this"
+    assert "MASTER_TITLE" not in master_title.text_frame.text
+
+
+def test_field_on_a_slide_layout_is_filled() -> None:
+    presentation = Presentation()
+    layout_title = presentation.slide_layouts[1].placeholders[0]
+    layout_title.text_frame.text = "{{LAYOUT_TITLE}}"
+
+    data = {"LAYOUT_TITLE": "Layout value"}
+    plan = subject.resolve_plan(subject.collect_fields(presentation), data, quiet())
+    assert plan.missing == []
+    assert plan.matches["LAYOUT_TITLE"][0].region == "layout"
+
+    subject.fill_presentation(plan, data, quiet())
+    assert layout_title.text_frame.text == "Layout value"
+
+
+def test_master_field_written_through_the_cli(tmp_path: Path) -> None:
+    template_path = build_template(tmp_path / "Template.pptx")
+    presentation = Presentation(str(template_path))
+    presentation.slide_layouts[1].placeholders[0].text_frame.text = "{{LAYOUT_TITLE}}"
+    presentation.save(str(template_path))
+
+    data = write_data(tmp_path, "LAYOUT_TITLE: From the layout\nCLIENT_NAME: Example\n")
+    output = tmp_path / "out"
+    args = [str(template_path), str(data), "-o", str(output), "--no-pdf", "-q"]
+    assert subject.main(args) == 0
+
+    written = Presentation(str(next(output.glob("*.pptx"))))
+    layout_title = written.slide_layouts[1].placeholders[0]
+    assert layout_title.text_frame.text == "From the layout"
+
+
+def test_same_field_repeated_on_every_slide_is_filled(tmp_path: Path) -> None:
+    presentation = Presentation()
+    for slide_number in range(3):
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        named = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+        named.name = "CLIENT_NAME"
+        named.text_frame.text = "old client"
+        token = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(4), Inches(1))
+        token.text_frame.text = "Prepared for {{ CLIENT_NAME }}"
+    template = tmp_path / "Template.pptx"
+    presentation.save(str(template))
+
+    data = {"CLIENT_NAME": "Example Energy"}
+    fields = subject.collect_fields(Presentation(str(template)))
+    plan = subject.resolve_plan(fields, data, quiet())
+    assert plan.missing == []
+    assert len(plan.matches["CLIENT_NAME"]) == 6
+    assert plan.field_count == 6
+
+    filled = fill_and_reopen(template, data, tmp_path / "out.pptx")
+    filled_fields = subject.collect_fields(filled)
+    named_shapes = [field for field in filled_fields if field.name == "CLIENT_NAME"]
+    assert [field.text for field in named_shapes] == ["Example Energy"] * 3
+    # A token match replaces the whole text frame, so all six boxes end up equal.
+    token_shapes = [field for field in filled_fields if field.name.startswith("TextBox")]
+    assert [field.text for field in token_shapes] == ["Example Energy"] * 3
+    assert not any("{{" in field.text for field in filled_fields)
 
 
 # --- writing ------------------------------------------------------------
@@ -574,7 +781,19 @@ def test_list_fields_prints_shape_names(tmp_path: Path, capsys) -> None:
     template = build_template(tmp_path / "Template.pptx")
     code = subject.main([str(template), "--list-fields"])
     assert code == 0
-    assert "CLIENT_NAME" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "CLIENT_NAME" in output
+    assert "Where" in output
+    assert "on layouts and masters" in output
+
+
+def test_list_fields_shows_a_token_on_the_master(capsys) -> None:
+    presentation = Presentation()
+    presentation.slide_master.placeholders[0].text_frame.text = "{{FOOTER_TEXT}}"
+    subject.print_field_list(subject.collect_fields(presentation))
+    output = capsys.readouterr().out
+    assert "master" in output
+    assert "token FOOTER_TEXT" in output
 
 
 def test_name_flag_names_the_files(tmp_path: Path) -> None:
