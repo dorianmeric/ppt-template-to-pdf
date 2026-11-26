@@ -4,13 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ppt-template-to-pdf"
-version = "1.2.0"
-description = "Fill a PowerPoint template from YAML and export the result to PDF."
+version = "1.3.0"
+description = "Fill a PowerPoint template from YAML or JSON and export the result to PDF."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-keywords = ["powerpoint", "pptx", "yaml", "pdf", "templating"]
+keywords = [
+    "powerpoint",
+    "pptx",
+    "yaml",
+    "json",
+    "pdf",
+    "templating",
+    "powerpoint-automation",
+    "report-generation",
+]
 dependencies = [
     "python-pptx>=1.0.2",
     "PyYAML>=6.0.4",

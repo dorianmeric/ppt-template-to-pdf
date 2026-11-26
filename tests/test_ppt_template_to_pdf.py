@@ -124,6 +124,79 @@ def test_syntax_error_reports_line_and_fix(tmp_path: Path) -> None:
     assert "Line:" in message and "How to fix it:" in message
 
 
+# --- JSON loading -------------------------------------------------------
+
+
+def test_json_data_is_loaded(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text('{"CLIENT_NAME": "Example", "SUMMARY": {"text": "hi"}}', encoding="utf-8")
+    assert subject.load_data_file(path) == {"CLIENT_NAME": "Example", "SUMMARY": {"text": "hi"}}
+
+
+def test_json_bom_is_accepted(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_bytes('{"CLIENT_NAME": "Example"}'.encode("utf-8-sig"))
+    assert subject.load_json_data(path) == {"CLIENT_NAME": "Example"}
+
+
+def test_json_keeps_untouched_number_and_bool(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text('{"SIZE": 9, "BOLD": true}', encoding="utf-8")
+    assert subject.load_json_data(path) == {"SIZE": 9, "BOLD": True}
+
+
+def test_json_duplicate_keys_are_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text('{"A": "one", "A": "two"}', encoding="utf-8")
+    with pytest.raises(subject.InputError) as info:
+        subject.load_json_data(path)
+    message = str(info.value)
+    assert "DUPLICATE KEY" in message and "'A'" in message
+
+
+def test_json_trailing_comma_reports_line_and_fix(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text('{\n  "CLIENT_NAME": "Example",\n}\n', encoding="utf-8")
+    with pytest.raises(subject.InputError) as info:
+        subject.load_json_data(path)
+    message = str(info.value)
+    assert "JSON SYNTAX ERROR" in message
+    assert "Line:" in message and "How to fix it:" in message
+    assert "trailing comma" in message
+
+
+def test_json_comment_is_explained(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text('{\n  "A": "one"\n  // set by the deal team\n}', encoding="utf-8")
+    with pytest.raises(subject.InputError) as info:
+        subject.load_json_data(path)
+    assert "no comments" in str(info.value)
+
+
+def test_json_empty_file_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text("   \n", encoding="utf-8")
+    with pytest.raises(subject.InputError) as info:
+        subject.load_json_data(path)
+    assert "empty" in str(info.value).lower()
+
+
+def test_json_top_level_list_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text('["A", "B"]', encoding="utf-8")
+    with pytest.raises(subject.InputError) as info:
+        subject.load_json_data(path)
+    assert "top level" in str(info.value)
+
+
+def test_json_html_value_is_parsed_as_formatting(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text('{"TITLE": "<font color=\\"#C00000\\">red</font>"}', encoding="utf-8")
+    assert subject.load_json_data(path) == {"TITLE": '<font color="#C00000">red</font>'}
+    paragraphs = subject.value_to_paragraph_definitions("<b>bold</b>", "JSON 'TITLE'")
+    assert paragraphs[0]["runs"][0]["bold"] is True
+
+
 # --- value coercion -----------------------------------------------------
 
 
@@ -426,6 +499,38 @@ def test_bad_yaml_exits_two(tmp_path: Path) -> None:
     data = write_data(tmp_path, 'A: "<b size="2">x</b>"\n')
     code = subject.main([str(template), str(data), "--no-pdf", "-q"])
     assert code == 2
+
+
+def write_json_data(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "data.json"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_json_data_file_writes_the_deck(tmp_path: Path) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_json_data(tmp_path, '{"CLIENT_NAME": "Example", "SUMMARY": "Done"}')
+    output = tmp_path / "out"
+    code = subject.main([str(template), str(data), "-o", str(output), "--no-pdf", "--quiet"])
+    assert code == 0
+    written = next(output.glob("*.pptx"))
+    assert written.name.startswith("Template - data - ")
+    assert shape_named(Presentation(str(written)), "CLIENT_NAME").text_frame.text == "Example"
+
+
+def test_missing_json_id_exits_three_and_names_json(tmp_path: Path, capsys) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_json_data(tmp_path, '{"NOPE": "Example"}')
+    code = subject.main([str(template), str(data), "--no-pdf"])
+    assert code == 3
+    assert "JSON IDs were not found" in capsys.readouterr().err
+
+
+def test_unsupported_data_suffix_exits_two(tmp_path: Path) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = tmp_path / "data.txt"
+    data.write_text("{}", encoding="utf-8")
+    assert subject.main([str(template), str(data), "--no-pdf", "-q"]) == 2
 
 
 def test_list_fields_prints_shape_names(tmp_path: Path, capsys) -> None:

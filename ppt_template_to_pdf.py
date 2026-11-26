@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Fill a PowerPoint template from YAML and optionally export the result to PDF.
+"""Fill a PowerPoint template from YAML or JSON and optionally export the result to PDF.
 
-See README.md for the YAML syntax, the template naming conventions, and the
-list of error messages.
+See README.md for the data file syntax, the template naming conventions, and
+the list of error messages.
 """
 
 from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import re
 import sys
 import tempfile
@@ -31,7 +32,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 PP_SAVE_AS_PDF = 32
 PP_SAVE_AS_OPEN_XML_PRESENTATION = 24
@@ -46,7 +47,8 @@ FALSE_WORDS = {"false", "no", "off", "0"}
 
 SUPPORTED_TEMPLATE_SUFFIXES = {".pptx", ".pptm", ".potx", ".ppt", ".pot"}
 LEGACY_TEMPLATE_SUFFIXES = {".ppt", ".pot"}
-SUPPORTED_DATA_SUFFIXES = {".yaml", ".yml"}
+SUPPORTED_DATA_SUFFIXES = {".yaml", ".yml", ".json"}
+DATA_FORMAT_LABELS = {".yaml": "YAML", ".yml": "YAML", ".json": "JSON"}
 
 PDF_UNAVAILABLE_HINT = (
     "PDF export needs Windows, desktop PowerPoint, and pywin32. "
@@ -100,13 +102,13 @@ class ScriptError(Exception):
 
 
 class InputError(ScriptError):
-    """Bad arguments, unreadable files, or invalid YAML content."""
+    """Bad arguments, unreadable files, or invalid YAML or JSON content."""
 
     exit_code = 2
 
 
 class FieldMatchError(ScriptError):
-    """The YAML refers to IDs the template does not contain."""
+    """The data file refers to IDs the template does not contain."""
 
     exit_code = 3
 
@@ -166,7 +168,7 @@ class Field:
 
 @dataclass
 class MatchPlan:
-    """The result of matching YAML IDs against template fields."""
+    """The result of matching data file IDs against template fields."""
 
     matches: dict[str, list[Field]] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
@@ -179,10 +181,11 @@ class MatchPlan:
 def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="ppt_template_to_pdf",
-        description="Fill a PowerPoint template from YAML and export the result to PDF.",
+        description="Fill a PowerPoint template from YAML or JSON and export the result to PDF.",
         epilog=(
             "Examples:\n"
             '  ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"\n'
+            '  ppt_template_to_pdf.py "Template.pptx" "Deal data.json"\n'
             '  ppt_template_to_pdf.py "Template.pptx" --list-fields\n'
             '  ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" --dry-run\n'
             '  ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" -o Output --no-pdf'
@@ -191,11 +194,11 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("template", type=Path, help="Path to the template .pptx file.")
     parser.add_argument(
-        "yaml_file",
+        "data_file",
         type=Path,
         nargs="?",
         default=None,
-        help="Path to the .yaml or .yml data file. Not needed with --list-fields.",
+        help="Path to the .yaml, .yml, or .json data file. Not needed with --list-fields.",
     )
     parser.add_argument(
         "-o",
@@ -208,7 +211,7 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Check the YAML and the template, print the matches, and write nothing.",
+        help="Check the data file and the template, print the matches, and write nothing.",
     )
     parser.add_argument(
         "--list-fields",
@@ -694,11 +697,16 @@ def match_reason(field: Field, unique_id: str, pattern: re.Pattern[str]) -> Opti
     return None
 
 
-def resolve_plan(fields: list[Field], yaml_data: dict[str, Any], reporter: Reporter) -> MatchPlan:
-    """Match every YAML ID against the template fields before anything is written."""
+def resolve_plan(
+    fields: list[Field],
+    data: dict[str, Any],
+    reporter: Reporter,
+    label: str = "YAML",
+) -> MatchPlan:
+    """Match every data file ID against the template fields before anything is written."""
     plan = MatchPlan()
     owners: dict[int, str] = {}
-    for unique_id in yaml_data:
+    for unique_id in data:
         pattern = token_pattern(unique_id)
         matched = []
         for template_field in fields:
@@ -726,12 +734,16 @@ def resolve_plan(fields: list[Field], yaml_data: dict[str, Any], reporter: Repor
     return plan
 
 
-def build_missing_message(missing: Sequence[str], fields: Sequence[Field]) -> str:
+def build_missing_message(
+    missing: Sequence[str],
+    fields: Sequence[Field],
+    label: str = "YAML",
+) -> str:
     """Explain which IDs were not found and suggest near matches."""
     candidates = {template_field.name for template_field in fields if template_field.name}
     for template_field in fields:
         candidates.update(match.strip() for match in TOKEN_SCAN_PATTERN.findall(template_field.text))
-    lines = ["These YAML IDs were not found in the template:"]
+    lines = [f"These {label} IDs were not found in the template:"]
     for unique_id in missing:
         close = difflib.get_close_matches(unique_id, sorted(candidates), n=1, cutoff=0.7)
         suffix = f" (did you mean '{close[0]}'?)" if close else ""
@@ -741,8 +753,13 @@ def build_missing_message(missing: Sequence[str], fields: Sequence[Field]) -> st
     return "\n".join(lines)
 
 
-def fill_presentation(plan: MatchPlan, yaml_data: dict[str, Any], reporter: Reporter) -> None:
-    """Write the YAML content into every matched field."""
+def fill_presentation(
+    plan: MatchPlan,
+    data: dict[str, Any],
+    reporter: Reporter,
+    label: str = "YAML",
+) -> None:
+    """Write the data file content into every matched field."""
     for unique_id, matched in plan.matches.items():
         for template_field in matched:
             reporter.detail(
@@ -751,13 +768,13 @@ def fill_presentation(plan: MatchPlan, yaml_data: dict[str, Any], reporter: Repo
             )
             populate_text_frame(
                 template_field.shape.text_frame,
-                yaml_data[unique_id],
-                where=f"YAML '{unique_id}' (slide {template_field.slide}, shape '{template_field.name}')",
+                data[unique_id],
+                where=f"{label} '{unique_id}' (slide {template_field.slide}, shape '{template_field.name}')",
             )
 
 
 def print_field_list(fields: Sequence[Field]) -> None:
-    """Print every text shape so the user can build the YAML file."""
+    """Print every text shape so the user can build the data file."""
     if not fields:
         print("No text shapes found in this presentation.")
         return
@@ -776,40 +793,52 @@ def print_field_list(fields: Sequence[Field]) -> None:
     for template_field, source, text in rows:
         print(f"{template_field.slide:<7}{template_field.name:<{name_width}}  {source:<{source_width}}  {text}")
     print()
-    print("Use these shape names, or the IDs inside {{braces}}, as top-level YAML keys.")
+    print("Use these shape names, or the IDs inside {{braces}}, as top-level YAML or JSON keys.")
 
 
-def load_yaml_data(yaml_path: Path) -> dict[str, Any]:
-    """Load YAML safely and report syntax errors with line, column, and a fix."""
+def read_data_text(data_path: Path) -> str:
+    """Read a data file as UTF-8 and explain decoding or reading failures."""
     try:
-        yaml_text = yaml_path.read_text(encoding="utf-8-sig")
+        return data_path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as error:
         raise InputError(
-            f"{yaml_path} is not valid UTF-8 text ({error.reason}). Save the file as UTF-8 and try again."
+            f"{data_path} is not valid UTF-8 text ({error.reason}). Save the file as UTF-8 and try again."
         ) from None
-    lint_yaml_text(yaml_text, yaml_path)
-    try:
-        loaded_data = yaml.load(yaml_text, Loader=UniqueKeyLoader)
-    except yaml.YAMLError as error:
-        raise InputError(format_yaml_error(yaml_path, yaml_text, error)) from None
+    except OSError as error:
+        raise InputError(f"Cannot read {data_path}: {error.strerror or error}") from None
+
+
+def normalise_data(loaded_data: Any, data_path: Path) -> dict[str, Any]:
+    """Check the top level and strip the IDs, whichever format produced the data."""
     if loaded_data is None:
-        raise InputError(f"{yaml_path} is empty. Add at least one 'ID: content' entry.")
+        raise InputError(f"{data_path} is empty. Add at least one 'ID: content' entry.")
     if not isinstance(loaded_data, dict):
         raise InputError(
-            f"{yaml_path}: the top level must be a mapping of 'ID: content', "
+            f"{data_path}: the top level must be a mapping of 'ID: content', "
             f"not {type(loaded_data).__name__}."
         )
     data: dict[str, Any] = {}
     for key, content in loaded_data.items():
         if not isinstance(key, str):
             raise InputError(
-                f"{yaml_path}: ID {key!r} is not text. YAML reads words such as NO, ON, YES, "
-                "and dates as true/false or dates. Wrap the ID in quotes, for example 'NO': content."
+                f"{data_path}: ID {key!r} is not text. YAML reads words such as NO, ON, YES, "
+                "and dates as true/false or dates. Quote the ID, for example 'NO': content."
             )
         data[key.strip()] = content
     if not data:
-        raise InputError(f"{yaml_path} contains no IDs.")
+        raise InputError(f"{data_path} contains no IDs.")
     return data
+
+
+def load_yaml_data(yaml_path: Path) -> dict[str, Any]:
+    """Load YAML safely and report syntax errors with line, column, and a fix."""
+    yaml_text = read_data_text(yaml_path)
+    lint_yaml_text(yaml_text, yaml_path)
+    try:
+        loaded_data = yaml.load(yaml_text, Loader=UniqueKeyLoader)
+    except yaml.YAMLError as error:
+        raise InputError(format_yaml_error(yaml_path, yaml_text, error)) from None
+    return normalise_data(loaded_data, yaml_path)
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -834,7 +863,7 @@ class UniqueKeyLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 
-def format_yaml_excerpt(lines: Sequence[str], line_index: int, column_index: int) -> str:
+def format_source_excerpt(lines: Sequence[str], line_index: int, column_index: int) -> str:
     """Quote the failing line with neighbours and a caret under the column."""
     first = max(0, line_index - 2)
     last = min(len(lines), line_index + 2)
@@ -953,10 +982,150 @@ def format_yaml_error(yaml_path: Path, yaml_text: str, error: yaml.YAMLError) ->
         f"Line:    {marker.line + 1}\n"
         f"Column:  {marker.column + 1}\n"
         f"Problem: {problem}\n\n"
-        f"{format_yaml_excerpt(lines, marker.line, marker.column)}\n\n"
+        f"{format_source_excerpt(lines, marker.line, marker.column)}\n\n"
         "How to fix it:\n"
         f"{yaml_error_suggestion(source_line, problem)}"
     )
+
+
+class DuplicateKeyError(ValueError):
+    """A JSON object repeats one of its keys."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
+
+
+def json_pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build every object and refuse duplicate keys, as the YAML loader does."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateKeyError(key)
+        result[key] = value
+    return result
+
+
+def find_json_comment(line: str) -> Optional[int]:
+    """Return the index of a '//' or '/*' that sits outside a JSON string."""
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif line.startswith(("//", "/*"), index):
+            return index
+        index += 1
+    return None
+
+
+def json_error_suggestion(source_line: str, problem: str) -> str:
+    """Turn a JSONDecodeError message into a concrete correction."""
+    lowered = problem.lower()
+    if find_json_comment(source_line) is not None:
+        return (
+            "JSON has no comments, so a '//' or '/* */' line is a syntax error. Delete the "
+            "comment, or keep the note in a separate file or under a key such as \"_note\"."
+        )
+    if "trailing comma" in lowered:
+        return (
+            "JSON allows no comma after the last entry of an object or an array. "
+            "Delete the comma before the closing brace or bracket."
+        )
+    if "expecting property name" in lowered:
+        return (
+            "JSON expects a double-quoted key here. The usual causes:\n"
+            "  - a trailing comma after the last entry (JSON allows no trailing comma)\n"
+            "  - a key without double quotes\n"
+            "  - a // or /* */ comment (JSON has no comments; delete it)\n"
+            "Remove the comma, quote the key, or delete the comment."
+        )
+    if "expecting ',' delimiter" in lowered:
+        return (
+            "Two entries are not separated. Add a comma between them, for example "
+            '{"A": "one", "B": "two"}. JSON also has no comments, so a // line between '
+            "two entries causes this error."
+        )
+    if "unterminated string" in lowered:
+        return (
+            "A string is missing its closing double quote, or it contains a raw line break. "
+            "Close the quote, or write the line break as \\n."
+        )
+    if "invalid control character" in lowered:
+        return "A string contains a raw line break or a tab. Escape it as \\n or \\t."
+    if "expecting value" in lowered:
+        return (
+            "JSON expects a value here: a double-quoted string, a number, true, false, null, "
+            'an object {..}, or an array [..]. An empty value such as "": is invalid, '
+            "and JSON has no comments."
+        )
+    if "extra data" in lowered:
+        return (
+            "The file holds more than one top-level object. Keep a single {..} block of "
+            '"ID": content entries and delete the rest.'
+        )
+    return "Check the highlighted position for a missing comma, a missing quote, or a trailing comma."
+
+
+def format_json_error(data_path: Path, json_text: str, error: json.JSONDecodeError) -> str:
+    """Format a JSONDecodeError with location, source context, and a likely correction."""
+    lines = json_text.splitlines() or [""]
+    line_index = min(max(error.lineno - 1, 0), len(lines) - 1)
+    column_index = max(error.colno - 1, 0)
+    source_line = lines[line_index]
+    return (
+        "JSON SYNTAX ERROR\n"
+        "=================\n"
+        f"File:    {data_path}\n"
+        f"Line:    {error.lineno}\n"
+        f"Column:  {error.colno}\n"
+        f"Problem: {error.msg}\n\n"
+        f"{format_source_excerpt(lines, line_index, column_index)}\n\n"
+        "How to fix it:\n"
+        f"{json_error_suggestion(source_line, error.msg)}"
+    )
+
+
+def load_json_data(json_path: Path) -> dict[str, Any]:
+    """Load JSON and report syntax errors with line, column, and a fix."""
+    json_text = read_data_text(json_path)
+    if not json_text.strip():
+        raise InputError(f"{json_path} is empty. Add at least one '\"ID\": content' entry.")
+    try:
+        loaded_data = json.loads(json_text, object_pairs_hook=json_pairs_hook)
+    except DuplicateKeyError as error:
+        raise InputError(
+            "JSON DUPLICATE KEY\n"
+            "==================\n"
+            f"File:    {json_path}\n"
+            f"Problem: the key {error.key!r} appears twice in the same object.\n\n"
+            "How to fix it:\n"
+            "Remove the duplicate or rename one of them."
+        ) from None
+    except json.JSONDecodeError as error:
+        raise InputError(format_json_error(json_path, json_text, error)) from None
+    return normalise_data(loaded_data, json_path)
+
+
+def data_format_label(data_path: Path) -> str:
+    """Name the data format so messages mention the file the user passed."""
+    return DATA_FORMAT_LABELS.get(data_path.suffix.lower(), "Data")
+
+
+def load_data_file(data_path: Path) -> dict[str, Any]:
+    """Load a .yaml, .yml, or .json data file."""
+    if data_path.suffix.lower() == ".json":
+        return load_json_data(data_path)
+    return load_yaml_data(data_path)
 
 
 def resolve_template(path: Path) -> Path:
@@ -972,12 +1141,13 @@ def resolve_template(path: Path) -> Path:
 
 
 def resolve_data_file(path: Path) -> Path:
-    """Validate the YAML path."""
+    """Validate the data file path."""
     path = path.expanduser().resolve()
     if not path.is_file():
-        raise InputError(f"YAML file not found: {path}")
+        raise InputError(f"Data file not found: {path}")
     if path.suffix.lower() not in SUPPORTED_DATA_SUFFIXES:
-        raise InputError(f"Data file must be .yaml or .yml: {path.name}")
+        supported = ", ".join(sorted(SUPPORTED_DATA_SUFFIXES))
+        raise InputError(f"Data file must be one of {supported}: {path.name}")
     return path
 
 
@@ -1184,12 +1354,12 @@ def build_job(arguments: argparse.Namespace) -> Job:
             raise InputError(LEGACY_TEMPLATE_HINT)
     if arguments.list_fields:
         return Job(template=template, output_dir=template.parent, list_fields=True)
-    if arguments.yaml_file is None:
+    if arguments.data_file is None:
         raise InputError(
-            "A YAML data file is required. Pass it as the second argument, "
+            "A data file is required. Pass a .yaml, .yml, or .json file as the second argument, "
             "or use --list-fields to inspect the template first."
         )
-    data = resolve_data_file(arguments.yaml_file)
+    data = resolve_data_file(arguments.data_file)
     export_pdf = not arguments.no_pdf
     if export_pdf:
         if sys.platform != "win32":
@@ -1222,26 +1392,27 @@ def run_job(job: Job, reporter: Reporter) -> int:
 def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
     """Fill the template, save the PPTX, and export the PDF."""
     assert job.data is not None
-    yaml_data = load_yaml_data(job.data)
+    data = load_data_file(job.data)
+    label = data_format_label(job.data)
     presentation = open_presentation(template_path)
     fields = collect_fields(presentation)
-    plan = resolve_plan(fields, yaml_data, reporter)
+    plan = resolve_plan(fields, data, reporter, label)
     if plan.missing:
-        raise FieldMatchError(build_missing_message(plan.missing, fields))
+        raise FieldMatchError(build_missing_message(plan.missing, fields, label))
     unfilled = [template_field for template_field in fields if not template_field.matched_by]
     for template_field in unfilled:
         reporter.detail(f"  left unchanged: slide {template_field.slide} '{template_field.name}'")
-    reporter.detail(f"  {len(plan.matches)} YAML ID(s) matched {plan.field_count} template field(s)")
+    reporter.detail(f"  {len(plan.matches)} {label} ID(s) matched {plan.field_count} template field(s)")
     if job.dry_run:
         reporter.info(
-            f"Dry run: {len(plan.matches)} YAML ID(s) matched {plan.field_count} template field(s). "
+            f"Dry run: {len(plan.matches)} {label} ID(s) matched {plan.field_count} template field(s). "
             "Nothing was written."
         )
         return 0
     output_pptx, output_pdf = resolve_output_paths(job, reporter)
     check_path_length([output_pptx, output_pdf] if job.export_pdf else [output_pptx], reporter)
     try:
-        fill_presentation(plan, yaml_data, reporter)
+        fill_presentation(plan, data, reporter, label)
     except ValueError as error:
         raise InputError(str(error)) from None
     save_presentation(presentation, output_pptx)
