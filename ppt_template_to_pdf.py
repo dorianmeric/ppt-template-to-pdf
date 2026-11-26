@@ -32,7 +32,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 PP_SAVE_AS_PDF = 32
 PP_SAVE_AS_OPEN_XML_PRESENTATION = 24
@@ -49,6 +49,17 @@ SUPPORTED_TEMPLATE_SUFFIXES = {".pptx", ".pptm", ".potx", ".ppt", ".pot"}
 LEGACY_TEMPLATE_SUFFIXES = {".ppt", ".pot"}
 SUPPORTED_DATA_SUFFIXES = {".yaml", ".yml", ".json"}
 DATA_FORMAT_LABELS = {".yaml": "YAML", ".yml": "YAML", ".json": "JSON"}
+
+INVALID_NAME_CHARACTERS = set('<>:"/\\|?*')
+RESERVED_OUTPUT_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
+OUTPUT_NAME_SUFFIXES = (".pptx", ".pdf")
 
 PDF_UNAVAILABLE_HINT = (
     "PDF export needs Windows, desktop PowerPoint, and pywin32. "
@@ -149,6 +160,7 @@ class Job:
     template: Path
     data: Optional[Path] = None
     output_dir: Optional[Path] = None
+    output_name: Optional[str] = None
     export_pdf: bool = True
     overwrite: bool = False
     dry_run: bool = False
@@ -188,7 +200,8 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             '  ppt_template_to_pdf.py "Template.pptx" "Deal data.json"\n'
             '  ppt_template_to_pdf.py "Template.pptx" --list-fields\n'
             '  ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" --dry-run\n'
-            '  ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" -o Output --no-pdf'
+            '  ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" -o Output --no-pdf\n'
+            '  ppt_template_to_pdf.py "Template.pptx" "Deal data.json" --name "Q3 update"'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -206,6 +219,16 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Output folder. Defaults to the template's folder.",
+    )
+    parser.add_argument(
+        "-n",
+        "--name",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Base name for the output PPTX and PDF, without extension. "
+            "Defaults to '<template> - <data> - <date>'."
+        ),
     )
     parser.add_argument("--no-pdf", action="store_true", help="Create only the PPTX file and skip PDF export.")
     parser.add_argument(
@@ -1166,10 +1189,46 @@ def resolve_output_dir(path: Optional[Path], template: Path, create: bool) -> Pa
     return output_dir
 
 
+def normalise_output_name(value: str) -> str:
+    """Check a --name value and drop a .pptx or .pdf extension the user may have typed."""
+    name = value.strip()
+    for suffix in OUTPUT_NAME_SUFFIXES:
+        if name.lower().endswith(suffix):
+            name = name[: -len(suffix)]
+    name = name.strip()
+    if not name:
+        raise InputError("--name must not be empty. Give a name such as 'Q3 update'.")
+    illegal = sorted(
+        {character for character in name if character in INVALID_NAME_CHARACTERS or ord(character) < 32}
+    )
+    if illegal:
+        listed = ", ".join(repr(character) for character in illegal)
+        raise InputError(
+            f"--name must not contain {listed}. It becomes a file name, so use letters, digits, "
+            "spaces, and '-', '_', or '.'."
+        )
+    if name.startswith(".") or name.endswith("."):
+        raise InputError(f"--name must not start or end with a dot: {name!r}")
+    if name.split(".")[0].upper() in RESERVED_OUTPUT_NAMES:
+        raise InputError(
+            f"--name {name!r} is a name Windows reserves for devices. Choose another name, "
+            "such as 'Q3 update'."
+        )
+    return name
+
+
+def output_stem(job: Job) -> str:
+    """Use --name when it was given, otherwise the template, data file, and date."""
+    if job.output_name:
+        return job.output_name
+    assert job.data is not None
+    return f"{job.template.stem} - {job.data.stem} - {date.today().isoformat()}"
+
+
 def resolve_output_paths(job: Job, reporter: Reporter) -> tuple[Path, Path]:
     """Build output paths, never clobbering earlier files unless --overwrite is set."""
-    assert job.data is not None and job.output_dir is not None
-    stem = f"{job.template.stem} - {job.data.stem} - {date.today().isoformat()}"
+    assert job.output_dir is not None
+    stem = output_stem(job)
     targets = [job.output_dir / f"{stem}.pptx"]
     if job.export_pdf:
         targets.append(job.output_dir / f"{stem}.pdf")
@@ -1370,10 +1429,12 @@ def build_job(arguments: argparse.Namespace) -> Job:
                 "Add --no-pdf to create only the PPTX file."
             )
     output_dir = resolve_output_dir(arguments.output_dir, template, create=not arguments.dry_run)
+    output_name = normalise_output_name(arguments.name) if arguments.name is not None else None
     return Job(
         template=template,
         data=data,
         output_dir=output_dir,
+        output_name=output_name,
         export_pdf=export_pdf,
         overwrite=arguments.overwrite,
         dry_run=arguments.dry_run,

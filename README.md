@@ -86,10 +86,33 @@ Template - Deal data - 2026-11-26.pptx
 Template - Deal data - 2026-11-26.pdf
 ```
 
+Pass `-n` / `--name` to name both files yourself:
+
+```
+python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" --name "Q3 update"
+```
+
+```
+Q3 update.pptx
+Q3 update.pdf
+```
+
+The extension is added for you, so `--name "Q3 update.pdf"` produces the same two files. A name that cannot be used as a file name is rejected with an error instead of failing later:
+
+| Name | Result |
+| --- | --- |
+| `Q3 update`, `Q3_update`, `v1.2 report` | Accepted. |
+| `Q3 update.pdf`, `Q3 update.pptx` | Accepted. The extension is dropped and both files are named `Q3 update`. |
+| `out/report` | Rejected. No folders in the name; use `--output-dir` for that. |
+| `Q3: update`, `Q3?`, `a*b`, `a|b`, `a"b` | Rejected. Characters Windows forbids in a file name. |
+| `CON`, `NUL`, `COM1`, `LPT1` | Rejected. Names Windows reserves for devices. |
+| `.hidden`, `trailing.` | Rejected. A name must not start or end with a dot. |
+
 If those files already exist, the script adds a number instead of overwriting them:
 
 ```
 Template - Deal data - 2026-11-26 (2).pptx
+Q3 update (2).pptx
 ```
 
 Pass `--overwrite` to replace the earlier files instead.
@@ -149,10 +172,11 @@ python ppt_template_to_pdf.py "Template.pptx" "Deal data.json"
 
 The data file extension picks the format: `.yaml` and `.yml` are read as YAML, `.json` is read as JSON. Everything else — the IDs, the values, the HTML formatting, the flags — behaves the same.
 
-Write outputs to another folder:
+Write outputs to another folder, and choose the base name of both files:
 
 ```
 python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" --output-dir "Output"
+python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" -o "Output" -n "Q3 update"
 ```
 
 Flags:
@@ -160,6 +184,7 @@ Flags:
 | Flag | Effect |
 | --- | --- |
 | `-o`, `--output-dir DIR` | Output folder. Created if missing. Defaults to the template's folder. |
+| `-n`, `--name NAME` | Base name for both output files, without extension. Defaults to `<template> - <data> - <date>`. A `.pptx` or `.pdf` suffix is dropped. |
 | `--no-pdf` | Create only the PPTX. Works without PowerPoint and without Windows. |
 | `--dry-run` | Check the data file and the template, print the matches, write nothing. |
 | `--list-fields` | Print every text shape name and token in the template, then exit. Needs no data file. |
@@ -494,6 +519,9 @@ If you need lower-level control, `python-pptx` is the library underneath and eve
 | `Reading a .ppt or .pot template needs Windows...` | The template is the old binary format and PowerPoint is not available. | Run on Windows with PowerPoint installed, or convert the file once with PowerPoint (File → Save As → `.pptx`) or `soffice --convert-to pptx "template.ppt"`. |
 | `Data file must be one of .json, .yaml, .yml` | The data file has another extension. | Rename the file or fix the extension. |
 | `Output path is a file, not a folder` | `-o` points at a file. | Pass a folder path, or delete the file. |
+| `--name must not contain ...` | The name holds a path separator or a character Windows forbids in a file name. | Use letters, digits, spaces, `-`, `_`, or `.`. Put folders in `--output-dir`. |
+| `--name ... is a name Windows reserves` | The name is `CON`, `NUL`, `COM1`, `LPT1`, and so on. | Pick another name. |
+| `--name must not start or end with a dot` | The name starts with `.` (a hidden file) or ends with `.` (Windows drops it). | Rename without the leading or trailing dot. |
 | `YAML COMMENT ERROR` | A double-quoted value contains `colour="#C00000"`. YAML reads `#` as a comment and cuts the value there. | The message prints the fixed line. Wrap the value in single quotes or use a `\|` block. |
 | `YAML SYNTAX ERROR` with line and column | Bad quotes, tabs, or indentation. | Read the quoted line and the suggestion under it. Use spaces, never tabs. |
 | `found duplicate key` | The same ID appears twice. | Remove the duplicate or rename one of them. |
@@ -562,6 +590,9 @@ Not currently. The script fills text boxes and text frames, including grouped sh
 
 **Can I fill dozens of fields at once?**
 Yes. One data file can hold every field for every slide. The IDs are matched across the whole presentation, including shapes inside groups.
+
+**Can I choose the output file name?**
+Yes. `-n` / `--name "Q3 update"` writes `Q3 update.pptx` and `Q3 update.pdf` in the output folder. Without it the name is `<template> - <data> - <date>`, and `(2)`, `(3)` are added rather than overwriting an earlier file.
 
 **Is there a way to check the template without running a real fill?**
 `--list-fields` lists every text shape and token, and `--dry-run -v` reports the planned matches and writes nothing.

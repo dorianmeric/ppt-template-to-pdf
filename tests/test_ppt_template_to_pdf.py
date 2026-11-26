@@ -460,6 +460,43 @@ def test_output_name_contains_names_and_date(tmp_path: Path) -> None:
     assert pdf_path.suffix == ".pdf"
 
 
+def test_custom_name_names_both_files(tmp_path: Path) -> None:
+    pptx_path, pdf_path = subject.resolve_output_paths(make_job(tmp_path, output_name="Q3 update"), quiet())
+    assert pptx_path.name == "Q3 update.pptx"
+    assert pdf_path.name == "Q3 update.pdf"
+
+
+def test_custom_name_keeps_the_numbering(tmp_path: Path) -> None:
+    job = make_job(tmp_path, output_name="Q3 update")
+    first_pptx, _ = subject.resolve_output_paths(job, quiet())
+    first_pptx.write_bytes(b"")
+    second_pptx, second_pdf = subject.resolve_output_paths(job, quiet())
+    assert second_pptx.name == "Q3 update (2).pptx"
+    assert second_pdf.name == "Q3 update (2).pdf"
+
+
+def test_custom_name_with_no_pdf_still_returns_both_paths(tmp_path: Path) -> None:
+    pptx_path, pdf_path = subject.resolve_output_paths(
+        make_job(tmp_path, output_name="Q3 update", export_pdf=False), quiet()
+    )
+    assert pptx_path.name == "Q3 update.pptx"
+    assert pdf_path.name == "Q3 update.pdf"
+
+
+@pytest.mark.parametrize("typed", ["Report", "Report.pdf", "Report.pptx", "Report.PDF", "  Report  "])
+def test_name_drops_a_typed_extension(typed: str) -> None:
+    assert subject.normalise_output_name(typed) == "Report"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["", "   ", "a/b", "a\\b", "a:b", "a*b", "a?b", "a|b", "a\"b", "..hidden", "trailing.", "CON", "lpt1", "nul"],
+)
+def test_bad_names_are_rejected(bad: str) -> None:
+    with pytest.raises(subject.InputError):
+        subject.normalise_output_name(bad)
+
+
 # --- command line -------------------------------------------------------
 
 
@@ -538,6 +575,21 @@ def test_list_fields_prints_shape_names(tmp_path: Path, capsys) -> None:
     code = subject.main([str(template), "--list-fields"])
     assert code == 0
     assert "CLIENT_NAME" in capsys.readouterr().out
+
+
+def test_name_flag_names_the_files(tmp_path: Path) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_data(tmp_path, "CLIENT_NAME: Example\n")
+    output = tmp_path / "out"
+    args = [str(template), str(data), "-o", str(output), "--no-pdf", "-q", "-n", "Q3 update.pdf"]
+    assert subject.main(args) == 0
+    assert [path.name for path in output.iterdir()] == ["Q3 update.pptx"]
+
+
+def test_bad_name_exits_two(tmp_path: Path) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_data(tmp_path, "CLIENT_NAME: Example\n")
+    assert subject.main([str(template), str(data), "--no-pdf", "-q", "-n", "bad/name"]) == 2
 
 
 def test_missing_data_argument_exits_two(tmp_path: Path) -> None:
