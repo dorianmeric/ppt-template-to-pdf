@@ -6,6 +6,9 @@ PowerPoint install and is exercised manually.
 
 from __future__ import annotations
 
+import importlib.util
+import re
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -761,6 +764,62 @@ def test_dry_run_reports_the_properties_it_would_set(tmp_path: Path, capsys) -> 
     assert "Dry run: 1 ID matched 1 text shape" in printed
     assert "2 document properties would be set" in printed
     assert "Nothing was written." in printed
+
+
+# --- release zip --------------------------------------------------------
+
+
+def load_release_tool():
+    """Import tools/make_release_zip.py, which is not on the pytest path."""
+    path = Path(__file__).resolve().parent.parent / "tools" / "make_release_zip.py"
+    spec = importlib.util.spec_from_file_location("make_release_zip", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def project_version(tool) -> str:
+    return tool.read_version(
+        tool.PROJECT_ROOT / "pyproject.toml", tool.PROJECT_VERSION_PATTERN, "version"
+    )
+
+
+def test_release_zip_holds_only_the_release_files(tmp_path: Path) -> None:
+    tool = load_release_tool()
+    version = project_version(tool)
+    archive_path = tool.build_archive(version, tmp_path)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        names = archive.namelist()
+    assert names == [f"ppt-template-to-pdf-{version}/{name}" for name in tool.RELEASE_FILES]
+    assert not any(
+        "/tests/" in name or "/assets/" in name or name.endswith("requirements-dev.txt")
+        for name in names
+    )
+
+
+def test_release_zip_versions_must_agree(tmp_path: Path) -> None:
+    tool = load_release_tool()
+    with pytest.raises(SystemExit) as info:
+        tool.main(["--expect-version", "9.9.9", "--output-dir", str(tmp_path)])
+    assert "Bump pyproject.toml" in str(info.value)
+
+
+def test_release_zip_builds_for_the_current_version(tmp_path: Path, capsys) -> None:
+    tool = load_release_tool()
+    version = project_version(tool)
+    assert tool.main(["--expect-version", version, "--output-dir", str(tmp_path)]) == 0
+    assert (tmp_path / f"ppt-template-to-pdf-{version}.zip").is_file()
+    assert f"contains ppt-template-to-pdf-{version}/README.md" in capsys.readouterr().out
+
+
+def test_script_and_pyproject_versions_match() -> None:
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+    script = Path("ppt_template_to_pdf.py").read_text(encoding="utf-8")
+    declared = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE)
+    shipped = re.search(r'^__version__ = "([^"]+)"', script, re.MULTILINE)
+    assert declared and shipped
+    assert declared.group(1) == shipped.group(1) == subject.__version__
 
 
 def test_reporter_flushes_each_line(monkeypatch) -> None:

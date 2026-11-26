@@ -70,6 +70,7 @@ Template - Deal data - 2026-11-26.pdf
   - [FAQ: update PowerPoint with Python](#faq-update-powerpoint-with-python)
   - [How this compares to other tools](#how-this-compares-to-other-tools)
   - [Search terms](#search-terms)
+  - [Releases](#releases)
   - [Run the tests](#run-the-tests)
   - [License](#license)
 
@@ -751,6 +752,40 @@ If your input is a spreadsheet and your output is a set of branded decks plus PD
 
 Variables, placeholders, tokens, mail merge, templating, data merge, python-pptx wrapper, pptx template filler, PowerPoint automation, PowerPoint generation, PPTX to PDF, `.potx` template, `.pptm`, `python-pptx` text replacement, replace text in PowerPoint with Python, fill PowerPoint template from YAML, fill PowerPoint template from JSON, fill PPTX from an API response, PowerPoint template from JSON in Python, generate slides from JSON data, fill PowerPoint template from Excel, generate PowerPoint report in Python, dynamic PowerPoint decks, batch PowerPoint generation, PowerPoint CLI, slide master placeholders, edit slide layout text in Python, replace placeholder on every slide, fill every occurrence of a placeholder, set PowerPoint document properties in Python, set PDF title and author from Python, PDF metadata for PowerPoint export, python-pptx core properties, docProps title subject keywords.
 
+## Releases
+
+Each release ships a small zip with only what a user needs, laid out inside one folder:
+
+```
+ppt-template-to-pdf-1.7.0/
+  ppt_template_to_pdf.py
+  README.md
+  pyproject.toml
+  requirements.txt
+  LICENSE
+```
+
+Tests, the `assets/` folder (screenshots, logo, demo template), and `requirements-dev.txt` are left out on purpose, so the download stays small and nothing development-only reaches a user.
+
+Build the same zip locally:
+
+```
+python tools/make_release_zip.py
+```
+
+It writes `dist/ppt-template-to-pdf-<version>.zip`, reads the version from `pyproject.toml`, and refuses to build when that version and `__version__` in the script disagree.
+
+Cut a release by pushing a tag that matches the version:
+
+```
+git tag v1.7.0
+git push origin main --tags
+```
+
+`.github/workflows/release.yml` then does the rest: it builds the zip, fails if anything unexpected slipped in, installs the zip in a clean runner and runs `ppt-fill --version` to prove it works, and publishes the GitHub release with the zip attached and notes that explain how to run it.
+
+To release without pushing a tag by hand, run the workflow from the Actions tab with the version as the input; it creates the `v` tag for you. Tick `draft` to review the release before it goes out.
+
 ## Run the tests
 
 ```
@@ -758,7 +793,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The tests cover YAML and JSON loading, the HTML parser, matching, document properties, and PPTX writing. They do not need PowerPoint. PDF export is checked by hand.
+The tests cover YAML and JSON loading, the HTML parser, matching, document properties, and PPTX writing, plus the release zip builder. They do not need PowerPoint. PDF export is checked by hand.
 
 ## License
 

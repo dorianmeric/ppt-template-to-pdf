@@ -1,0 +1,137 @@
+name: Release
+
+# Cut a release by pushing a tag that matches the version in pyproject.toml and
+# __version__, or run this workflow by hand and pass the version. The workflow
+# builds the lean zip, checks it, installs it in a clean runner, and publishes
+# the GitHub release with the zip attached.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, for example 1.7.0. A leading v is accepted."
+        required: true
+        type: string
+      draft:
+        description: "Create the release as a draft instead of publishing it."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish the release zip
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Work out the tag and version
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="$REF_NAME"
+          fi
+          version="${version#v}"
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error::'$version' is not a version such as 1.7.0"
+              exit 1
+              ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $version as tag v$version"
+
+      - name: Build the zip
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: python tools/make_release_zip.py --expect-version "$VERSION"
+
+      - name: Check the zip holds only the release files
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          archive="dist/ppt-template-to-pdf-$VERSION.zip"
+          unzip -Z1 "$archive"
+          if unzip -Z1 "$archive" | grep -Eq '/(tests|assets)/|requirements-dev\.txt|__pycache__|\.venv'; then
+            echo "::error::The release zip contains tests, assets, or development files."
+            exit 1
+          fi
+
+      - name: Install the zip and run the tool
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          unzip -q "dist/ppt-template-to-pdf-$VERSION.zip" -d build
+          python -m pip install --disable-pip-version-check --quiet "build/ppt-template-to-pdf-$VERSION"
+          ppt-fill --version
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          Lean release bundle for version $VERSION.
+
+          The zip unpacks into a folder named ppt-template-to-pdf-$VERSION holding
+          only what a user needs:
+
+          - ppt_template_to_pdf.py - the script
+          - README.md - the full documentation
+          - pyproject.toml - installs the ppt-fill command
+          - requirements.txt - the runtime dependencies
+          - LICENSE - MIT
+
+          Run it without installing anything:
+
+              unzip ppt-template-to-pdf-$VERSION.zip
+              python -m pip install -r ppt-template-to-pdf-$VERSION/requirements.txt
+              python ppt-template-to-pdf-$VERSION/ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"
+
+          Or install the ppt-fill command:
+
+              python -m pip install ./ppt-template-to-pdf-$VERSION
+              ppt-fill "Template.pptx" "Deal data.yaml"
+
+          Tests, screenshots, and development requirements stay in the repository.
+          EOF
+          draft=""
+          if [ "$DRAFT" = "true" ]; then draft="--draft"; fi
+          gh release create "$TAG" "dist/ppt-template-to-pdf-$VERSION.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "ppt-template-to-pdf $VERSION" \
+            --notes-file "$notes" \
+            $draft
+          echo "Published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
