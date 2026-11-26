@@ -186,6 +186,49 @@ Templates can be `.pptx`, `.pptm`, `.potx`, `.ppt`, or `.pot`. The output is alw
 
 Legacy `.ppt` and `.pot` files are converted to `.pptx` in a temporary folder with PowerPoint before the script fills them. The temporary copy is deleted at the end. The output name still uses the original template name, without the old extension.
 
+## HTML inside YAML strings
+
+Supported tags:
+
+- `b`, `strong`: bold.
+- `u`: underline.
+- `font`: `color` and `size` attributes.
+- `span`: inline CSS with `color` and `font-size` only.
+- `ul`: bulleted list.
+- `ol`: numbered list.
+- `li`: one paragraph in the current list.
+- `br`, `p`: paragraph breaks.
+
+Examples:
+
+```yaml
+SLIDE1_TITLE: "<b>Bold text</b> and <u>underlined text</u>"
+SLIDE1_Subtitle: "Text with no formatting"
+COLOURED: '<font color="#C00000">Red text</font>'
+SIZED: '<font size="14">14-point text</font>'
+COMBINED: '<span style="color:#C00000; font-size:14pt"><b>Red, bold, 14-point text</b></span>'
+
+Slide2_BULLETS: |
+  <ul>
+    <li>First bullet</li>
+    <li>Second bullet with <b>bold text</b></li>
+  </ul>
+
+Slide3_multiline_steps: |
+  <ol>
+    <li>First step</li>
+    <li>Second step</li>
+  </ol>
+```
+
+To print a tag as text, escape the angle brackets:
+
+```yaml
+LITERAL_TAG: "&lt;b&gt;This is not bold&lt;/b&gt;"
+```
+
+Use single quotes around a YAML value that contains HTML with double-quoted attributes. Double-quoted YAML strings end at the first inner `"`. The alternative is a block value with `|`.
+
 ## YAML format
 
 The top level must be a mapping of `ID: content`.
@@ -266,48 +309,6 @@ Paragraph fields:
 Paragraph and run formatting that the YAML does not set comes from the first paragraph and first run of the template text box.
 
 Unknown keys are rejected rather than ignored. A typo like `colourr` reports `did you mean 'colour'?`.
-
-## HTML inside YAML strings
-
-Supported tags:
-
-- `b`, `strong`: bold.
-- `u`: underline.
-- `font`: `color` and `size` attributes.
-- `span`: inline CSS with `color` and `font-size` only.
-- `ul`: bulleted list.
-- `ol`: numbered list.
-- `li`: one paragraph in the current list.
-- `br`, `p`: paragraph breaks.
-
-Examples:
-
-```yaml
-TITLE: "<b>Bold text</b> and <u>underlined text</u>"
-COLOURED: '<font color="#C00000">Red text</font>'
-SIZED: '<font size="14">14-point text</font>'
-COMBINED: '<span style="color:#C00000; font-size:14pt"><b>Red, bold, 14-point text</b></span>'
-
-BULLETS: |
-  <ul>
-    <li>First bullet</li>
-    <li>Second bullet with <b>bold text</b></li>
-  </ul>
-
-STEPS: |
-  <ol>
-    <li>First step</li>
-    <li>Second step</li>
-  </ol>
-```
-
-To print a tag as text, escape the angle brackets:
-
-```yaml
-LITERAL_TAG: "&lt;b&gt;This is not bold&lt;/b&gt;"
-```
-
-Use single quotes around a YAML value that contains HTML with double-quoted attributes. Double-quoted YAML strings end at the first inner `"`. The alternative is a block value with `|`.
 
 ## What can go wrong
 
