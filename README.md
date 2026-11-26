@@ -11,7 +11,7 @@
 
 `ppt_template_to_pdf.py` takes a PowerPoint template, replaces the placeholders with values from a **YAML or JSON** data file, saves the filled deck as `.pptx`, and exports the same deck to `.pdf`. It is a command-line tool and a Python module, so it works by hand, from a script, from a scheduled job, or in CI.
 
-On Windows you do not need Python at all: grab `ppt-fill-<version>-x64.exe` (or `-x86.exe` for 32-bit Office) from [Releases](../../releases) — one file with the runtime and every dependency inside. See [Windows executables](#windows-executables).
+On Windows, macOS, and Linux you do not need Python at all: grab the matching binary from [Releases](../../releases) — one file with the runtime and every dependency inside. See [Pre-built executables](#pre-built-executables).
 
 People find this repo looking for:
 
@@ -72,7 +72,7 @@ Template - Deal data - 2026-11-26.pdf
   - [FAQ: update PowerPoint with Python](#faq-update-powerpoint-with-python)
   - [How this compares to other tools](#how-this-compares-to-other-tools)
   - [Search terms](#search-terms)
-  - [Windows executables](#windows-executables)
+  - [Pre-built executables](#pre-built-executables)
   - [Releases](#releases)
   - [Run the tests](#run-the-tests)
   - [License](#license)
@@ -168,11 +168,11 @@ python "C:\path\to\python\Scripts\pywin32_postinstall.py" -install
 
 Find the real path with `python -c "import sys; print(sys.prefix)"`.
 
-Install the script itself to get a `ppt-fill` command:
+Install the script itself to get a `ppt-template-to-pdf` command:
 
 ```
 python -m pip install .
-ppt-fill "Template.pptx" "Deal data.yaml"
+ppt-template-to-pdf "Template.pptx" "Deal data.yaml"
 ```
 
 ## Use
@@ -755,59 +755,71 @@ If your input is a spreadsheet and your output is a set of branded decks plus PD
 
 Variables, placeholders, tokens, mail merge, templating, data merge, python-pptx wrapper, pptx template filler, PowerPoint automation, PowerPoint generation, PPTX to PDF, `.potx` template, `.pptm`, `python-pptx` text replacement, replace text in PowerPoint with Python, fill PowerPoint template from YAML, fill PowerPoint template from JSON, fill PPTX from an API response, PowerPoint template from JSON in Python, generate slides from JSON data, fill PowerPoint template from Excel, generate PowerPoint report in Python, dynamic PowerPoint decks, batch PowerPoint generation, PowerPoint CLI, slide master placeholders, edit slide layout text in Python, replace placeholder on every slide, fill every occurrence of a placeholder, set PowerPoint document properties in Python, set PDF title and author from Python, PDF metadata for PowerPoint export, python-pptx core properties, docProps title subject keywords.
 
-## Windows executables
+## Pre-built executables
 
-Every release carries two pre-built Windows executables, so a user with no Python installed can still run the fill:
+Every release carries a binary for each common platform, so a user with no Python installed can still run the fill:
 
-| File | Runs on |
-| --- | --- |
-| `ppt-fill-<version>-x64.exe` | 64-bit Windows. The usual choice. |
-| `ppt-fill-<version>-x86.exe` | 32-bit Windows, and 64-bit Windows too. |
+| File | Runs on | Notes |
+| --- | --- | --- |
+| `ppt-template-to-pdf-<version>-windows-x64.exe` | 64-bit Windows | The usual choice on Windows. |
+| `ppt-template-to-pdf-<version>-windows-x86.exe` | 32-bit Windows, and 64-bit Windows | Take it only if you are on 32-bit Windows or a tool of yours insists on a 32-bit binary. |
+| `ppt-template-to-pdf-<version>-macos-arm64` | macOS on Apple silicon (M1 and later) | |
+| `ppt-template-to-pdf-<version>-macos-x86_64` | macOS on Intel | |
+| `ppt-template-to-pdf-<version>-linux-x86_64` | 64-bit Linux | Needs glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10+. |
 
-Both automate PowerPoint the same way, whatever the bitness of the Office install: PowerPoint is an out-of-process COM server, so a 32-bit `ppt-fill` can export a PDF through 64-bit Office, and the other way round. Take `x64` unless you are on 32-bit Windows or a tool of yours insists on a 32-bit binary.
-
-Each one is a single file: the CPython runtime, the standard library, python-pptx, PyYAML, lxml, Pillow, XlsxWriter, and pywin32 are all inside. Copy it anywhere, open a terminal, and run it like the script:
+Each one is a single file: the CPython runtime, the standard library, python-pptx, PyYAML, lxml, Pillow, XlsxWriter, and (on Windows) pywin32 are all inside. Copy it anywhere, open a terminal, and run it like the script:
 
 ```
-ppt-fill-1.8.0-x64.exe --help
-ppt-fill-1.8.0-x64.exe "Template.pptx" "Deal data.yaml"
-ppt-fill-1.8.0-x64.exe "Template.pptx" --list-fields
-ppt-fill-1.8.0-x64.exe "Template.pptx" "Deal data.json" -o Output --name "Q3 update"
+# Windows
+ppt-template-to-pdf-1.9.0-windows-x64.exe --help
+ppt-template-to-pdf-1.9.0-windows-x64.exe "Template.pptx" "Deal data.yaml"
+
+# macOS and Linux: restore the executable bit first if the download lost it
+chmod +x ppt-template-to-pdf-1.9.0-linux-x86_64 ./ppt-template-to-pdf-1.9.0-linux-x86_64
+./ppt-template-to-pdf-1.9.0-linux-x86_64 "Template.pptx" "Deal data.yaml"
+./ppt-template-to-pdf-1.9.0-macos-arm64 "Template.pptx" --list-fields
+./ppt-template-to-pdf-1.9.0-linux-x86_64 "Template.pptx" "Deal data.json" -o Output --name "Q3 update"
 ```
 
-Every flag, exit code, and message is the same as the Python version. Two things are worth knowing:
+Every flag, exit code, and message is the same as the Python version. Three things are worth knowing:
 
-- Desktop PowerPoint is still required for PDF export and for reading legacy `.ppt` and `.pot` templates. Add `--no-pdf` to fill a `.pptx` on a machine without Office.
-- The executable is a Nuitka one-file build, so it unpacks itself into `%TEMP%` before starting. That costs a second or two on the first run; nothing is left behind afterwards except the usual temp folder.
+- **PDF export is Windows-only.** It drives desktop PowerPoint over COM, so on macOS and Linux the binary fills the `.pptx` and stops there. Add `--no-pdf` and convert afterwards with LibreOffice: `soffice --headless --convert-to pdf "deck.pptx"`. Legacy `.ppt` and `.pot` templates are Windows-only for the same reason.
+- **One file, unpacked at start.** These are Nuitka one-file builds, so each one unpacks itself into the temp folder (`%TEMP%`, `$TMPDIR`, `/tmp`) before running. That costs a second or two on the first start and leaves nothing behind.
+- **Downloaded binaries may need a nudge.** A file fetched through a browser can lose the executable bit on macOS and Linux (`chmod +x`), and macOS may quarantine it: `xattr -d com.apple.quarantine ppt-template-to-pdf-1.9.0-macos-arm64`. The macOS builds are unsigned, so prefer `curl -LO` when you want to skip that.
 
-They are built in CI by [Nuitka](https://nuitka.net/) through [Nuitka-Action](https://github.com/Nuitka/Nuitka-Action): one job per Python architecture, each smoke tested (`--version`, `--list-fields`, and a real fill) before it is attached to the release. Nuitka compiles the Python modules to C and bundles the runtime and the extension modules, which is what makes a single file possible.
+Windows builds work with either bitness of Office, because PowerPoint is an out-of-process COM server: a 32-bit `ppt-template-to-pdf` can export a PDF through 64-bit Office and the other way round.
 
-To build one yourself on Windows:
+All of them are built in CI by [Nuitka](https://nuitka.net/) through [Nuitka-Action](https://github.com/Nuitka/Nuitka-Action), one job per platform and architecture (`ubuntu-22.04` for Linux, `macos-latest` and `macos-15-intel` for macOS, `windows-latest` for Windows). Each binary is smoke tested on its own runner before it is attached to the release: `--version`, `--list-fields`, and a real fill of the demo deck. Nuitka compiles the Python modules to C and bundles the runtime and the extension modules, which is what makes a single file possible.
+
+To build one yourself, on the platform you are targeting:
 
 ```
 python -m pip install -r requirements.txt nuitka
-python -m nuitka --onefile --output-dir=dist --output-filename=ppt-fill.exe ^
-    --windows-icon-from-ico=assets/logo.ico --windows-console-mode=force ^
-    --include-package=win32com --include-package-data=pptx ^
-    ppt_template_to_pdf.py
+python -m nuitka --onefile --output-dir=dist --output-filename=ppt-template-to-pdf \
+    --include-package-data=pptx ppt_template_to_pdf.py
 ```
 
-Use a 32-bit Python to get the x86 build; Nuitka cannot cross-compile. The workflow passes the same options plus the version metadata.
+On Windows add `--windows-icon-from-ico=assets/logo.ico --windows-console-mode=force --include-package=win32com` and finish the name with `.exe`. Nuitka cannot cross-compile, so each platform and architecture needs its own interpreter: a 32-bit Python for the Windows x86 build, an Intel Mac for the macOS Intel build.
 
 ## Releases
 
-Each release publishes three assets:
+Each release publishes six assets:
 
 | Asset | What it is |
 | --- | --- |
 | `ppt-template-to-pdf-<version>.zip` | The lean source bundle, described below. |
-| `ppt-fill-<version>-x64.exe` | The 64-bit Windows executable (see [Windows executables](#windows-executables)). |
-| `ppt-fill-<version>-x86.exe` | The 32-bit Windows executable. |
+| `ppt-template-to-pdf-<version>-windows-x64.exe` | Windows, 64-bit. |
+| `ppt-template-to-pdf-<version>-windows-x86.exe` | Windows, 32-bit. |
+| `ppt-template-to-pdf-<version>-macos-arm64` | macOS on Apple silicon. |
+| `ppt-template-to-pdf-<version>-macos-x86_64` | macOS on Intel. |
+| `ppt-template-to-pdf-<version>-linux-x86_64` | Linux, 64-bit. |
+
+See [Pre-built executables](#pre-built-executables) for requirements and usage.
 
 The zip holds only what a user needs, laid out inside one folder:
 
 ```
-ppt-template-to-pdf-1.8.0/
+ppt-template-to-pdf-1.9.0/
   ppt_template_to_pdf.py
   README.md
   pyproject.toml
@@ -828,16 +840,18 @@ It writes `dist/ppt-template-to-pdf-<version>.zip`, reads the version from `pypr
 Cut a release by pushing a tag that matches the version:
 
 ```
-git tag v1.8.0
+git tag v1.9.0
 git push origin main --tags
 ```
 
 `.github/workflows/release.yml` then does the rest:
 
-- **version** works out the tag and checks it looks like `1.8.0`.
-- **bundle** runs the test suite, builds the zip, fails if anything unexpected slipped in, installs the zip in a clean runner and runs `ppt-fill --version`.
-- **windows** builds the executable twice with Nuitka, once per architecture (`x64`, `x86`), then smoke tests each one by listing fields and filling the demo deck.
-- **publish** collects all three files and creates the GitHub release with notes that explain how to run them.
+- **version** works out the tag and checks it looks like `1.9.0`.
+- **bundle** runs the test suite, builds the zip, fails if anything unexpected slipped in, installs the zip in a clean runner and runs `ppt-template-to-pdf --version`.
+- **windows** builds the executable twice with Nuitka, once per architecture (`x64`, `x86`), on `windows-latest`.
+- **macos** builds it on `macos-latest` (Apple silicon) and `macos-15-intel`.
+- **linux** builds it once on `ubuntu-22.04`, the oldest runner, which sets the glibc floor.
+- Each build job smoke tests its own binary (`--version`, `--list-fields`, a real fill) before **publish** collects all six files and creates the GitHub release.
 
 To release without pushing a tag by hand, run the workflow from the Actions tab with the version as the input; it creates the `v` tag for you. Tick `draft` to review the release before it goes out.
 

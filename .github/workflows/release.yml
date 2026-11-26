@@ -2,14 +2,17 @@ name: Release
 
 # Cut a release by pushing a tag that matches the version in pyproject.toml and
 # __version__, or run this workflow by hand and pass the version. It publishes
-# three assets:
+# the lean source bundle plus a pre-built executable for each platform:
 #
-#   ppt-template-to-pdf-<version>.zip   the lean source bundle
-#   ppt-fill-<version>-x64.exe          Windows executable, 64-bit
-#   ppt-fill-<version>-x86.exe          Windows executable, 32-bit
+#   ppt-template-to-pdf-<version>.zip    the lean source bundle
+#   ppt-template-to-pdf-<version>-windows-x64.exe   Windows, 64-bit
+#   ppt-template-to-pdf-<version>-windows-x86.exe   Windows, 32-bit
+#   ppt-template-to-pdf-<version>-macos-arm64       macOS on Apple silicon
+#   ppt-template-to-pdf-<version>-macos-x86_64      macOS on Intel
+#   ppt-template-to-pdf-<version>-linux-x86_64      Linux, 64-bit
 #
-# The executables are built with Nuitka (Nuitka-Action) on a Windows runner, one
-# per Python architecture, and each one is smoke tested before it is published.
+# The executables are built with Nuitka (Nuitka-Action), one per architecture,
+# and each one is smoke tested on its own runner before it is published.
 
 on:
   push:
@@ -18,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release, for example 1.8.0. A leading v is accepted."
+        description: "Version to release, for example 1.9.0. A leading v is accepted."
         required: true
         type: string
       draft:
@@ -59,7 +62,7 @@ jobs:
           case "$version" in
             [0-9]*.[0-9]*.[0-9]*) ;;
             *)
-              echo "::error::'$version' is not a version such as 1.8.0"
+              echo "::error::'$version' is not a version such as 1.9.0"
               exit 1
               ;;
           esac
@@ -110,7 +113,7 @@ jobs:
           set -euo pipefail
           unzip -q "dist/ppt-template-to-pdf-$VERSION.zip" -d build
           python -m pip install --disable-pip-version-check --quiet "build/ppt-template-to-pdf-$VERSION"
-          ppt-fill --version
+          ppt-template-to-pdf --version
 
       - name: Upload the zip
         uses: actions/upload-artifact@v4
@@ -154,7 +157,7 @@ jobs:
           script-name: ppt_template_to_pdf.py
           mode: onefile
           output-dir: dist
-          output-file: ppt-fill-${{ needs.version.outputs.version }}-${{ matrix.arch }}.exe
+          output-file: ppt-template-to-pdf-${{ needs.version.outputs.version }}-windows-${{ matrix.arch }}.exe
           windows-icon-from-ico: assets/logo.ico
           windows-console-mode: force
           include-package: win32com
@@ -173,7 +176,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
-          $exe = "dist/ppt-fill-$env:VERSION-$env:ARCH.exe"
+          $exe = "dist/ppt-template-to-pdf-$env:VERSION-windows-$env:ARCH.exe"
           if (-not (Test-Path $exe)) { throw "Nuitka did not produce $exe" }
           Get-Item $exe | Select-Object Name, Length
           & $exe --version
@@ -189,13 +192,139 @@ jobs:
       - name: Upload the executable
         uses: actions/upload-artifact@v4
         with:
-          name: exe-${{ matrix.arch }}
+          name: exe-windows-${{ matrix.arch }}
           path: dist/*.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS executable (${{ matrix.arch }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the runtime dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet -r requirements.txt
+          python -c "import platform, sys; print(sys.version); print(platform.machine())"
+
+      - name: Build the executable with Nuitka
+        uses: Nuitka/Nuitka-Action@v1.5
+        with:
+          nuitka-version: "4.4"
+          script-name: ppt_template_to_pdf.py
+          mode: onefile
+          output-dir: dist
+          output-file: ppt-template-to-pdf-${{ needs.version.outputs.version }}-macos-${{ matrix.arch }}
+          include-package-data: pptx
+          assume-yes-for-downloads: true
+
+      - name: Smoke test the executable
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          exe="dist/ppt-template-to-pdf-$VERSION-macos-$ARCH"
+          chmod +x "$exe"
+          ls -l "$exe"
+          sw_vers
+          # Record the deployment target the binary will ask for at run time.
+          otool -l "$exe" | grep -A4 -m1 "LC_BUILD_VERSION" || true
+          "$exe" --version
+          "$exe" "assets/screenshots/demo-template.pptx" --list-fields
+          printf '%s' '{ "TRANSACTION_TITLE": "CI build", "SUMMARY": "Nuitka build works", "DISCLAIMER": "Internal" }' > smoke.json
+          "$exe" "assets/screenshots/demo-template.pptx" smoke.json -o smoke-out --no-pdf
+          ls -l smoke-out
+          test -n "$(ls smoke-out/*.pptx)"
+
+      - name: Upload the executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-macos-${{ matrix.arch }}
+          path: dist/ppt-template-to-pdf-*-macos-*
+          if-no-files-found: error
+
+  linux:
+    name: Linux executable (x86_64)
+    needs: version
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the runtime dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet -r requirements.txt
+          python -c "import platform, sys; print(sys.version); print(platform.machine())"
+          # The glibc shipped here is the floor the binary will run on.
+          ldd --version | head -1
+
+      - name: Build the executable with Nuitka
+        uses: Nuitka/Nuitka-Action@v1.5
+        with:
+          nuitka-version: "4.4"
+          script-name: ppt_template_to_pdf.py
+          mode: onefile
+          output-dir: dist
+          output-file: ppt-template-to-pdf-${{ needs.version.outputs.version }}-linux-x86_64
+          include-package-data: pptx
+          assume-yes-for-downloads: true
+
+      - name: Smoke test the executable
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          exe="dist/ppt-template-to-pdf-$VERSION-linux-x86_64"
+          chmod +x "$exe"
+          ls -l "$exe"
+          file "$exe" || true
+          "$exe" --version
+          "$exe" "assets/screenshots/demo-template.pptx" --list-fields
+          printf '%s' '{ "TRANSACTION_TITLE": "CI build", "SUMMARY": "Nuitka build works", "DISCLAIMER": "Internal" }' > smoke.json
+          "$exe" "assets/screenshots/demo-template.pptx" smoke.json -o smoke-out --no-pdf
+          ls -l smoke-out
+          test -n "$(ls smoke-out/*.pptx)"
+          # PDF export needs Windows; the binary must say so rather than crash.
+          if "$exe" "assets/screenshots/demo-template.pptx" smoke.json -o smoke-pdf; then
+            echo "::error::PDF export should have been refused on Linux"
+            exit 1
+          fi
+
+      - name: Upload the executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-linux-x86_64
+          path: dist/ppt-template-to-pdf-*-linux-*
           if-no-files-found: error
 
   publish:
     name: Publish the release
-    needs: [version, bundle, windows]
+    needs: [version, bundle, windows, macos, linux]
     runs-on: ubuntu-latest
     steps:
       - name: Collect the assets
@@ -220,20 +349,33 @@ jobs:
           Release $VERSION of ppt-template-to-pdf: a Python script that fills a
           PowerPoint template from YAML or JSON and exports the deck to PDF.
 
-          ## Windows executable (no Python needed)
+          ## Pre-built executables (no Python needed)
 
-          - \`ppt-fill-$VERSION-x64.exe\` - 64-bit Windows
-          - \`ppt-fill-$VERSION-x86.exe\` - 32-bit Windows, and 64-bit Windows too
+          | File | Runs on |
+          | --- | --- |
+          | \`ppt-template-to-pdf-$VERSION-windows-x64.exe\` | Windows, 64-bit |
+          | \`ppt-template-to-pdf-$VERSION-windows-x86.exe\` | Windows, 32-bit, and 64-bit Windows |
+          | \`ppt-template-to-pdf-$VERSION-macos-arm64\` | macOS on Apple silicon (M1 and later) |
+          | \`ppt-template-to-pdf-$VERSION-macos-x86_64\` | macOS on Intel |
+          | \`ppt-template-to-pdf-$VERSION-linux-x86_64\` | Linux, 64-bit |
 
-          Both can drive PowerPoint whatever its bitness, because PowerPoint is an
-          out-of-process COM server. Each one is a single file with the Python runtime and every dependency
+          Each one is a single file with the Python runtime and every dependency
           inside, built with Nuitka. Copy it anywhere and run it from a terminal:
 
-              ppt-fill-$VERSION-x64.exe --help
-              ppt-fill-$VERSION-x64.exe "Template.pptx" "Deal data.yaml"
+              chmod +x ppt-template-to-pdf-$VERSION-linux-x86_64
+              ./ppt-template-to-pdf-$VERSION-linux-x86_64 --help
+              ./ppt-template-to-pdf-$VERSION-linux-x86_64 "Template.pptx" "Deal data.yaml"
 
-          Desktop PowerPoint is still needed for PDF export and for reading legacy
-          .ppt and .pot templates; add --no-pdf to work without it.
+          Desktop PowerPoint is needed for PDF export and for reading legacy .ppt
+          and .pot templates, and it only exists on Windows. On macOS and Linux the
+          binaries fill the .pptx and stop there; add --no-pdf, then convert the deck
+          with LibreOffice (soffice --headless --convert-to pdf) if you need a PDF.
+
+          The Linux binary is built on Ubuntu 22.04, so it needs glibc 2.35 or newer:
+          Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10+. macOS builds target
+          macOS 11 or newer. Binaries downloaded through a browser need the executable
+          bit restored with chmod +x; if macOS refuses to run one, clear the quarantine
+          flag with \`xattr -d com.apple.quarantine <file>\`.
 
           ## Source bundle
 
@@ -241,7 +383,7 @@ jobs:
 
           - ppt_template_to_pdf.py - the script
           - README.md - the full documentation
-          - pyproject.toml - installs the ppt-fill command
+          - pyproject.toml - installs the ppt-template-to-pdf command
           - requirements.txt - the runtime dependencies
           - LICENSE - MIT
 
@@ -252,7 +394,7 @@ jobs:
           Or install the console command:
 
               python -m pip install ./ppt-template-to-pdf-$VERSION
-              ppt-fill "Template.pptx" "Deal data.yaml"
+              ppt-template-to-pdf "Template.pptx" "Deal data.yaml"
 
           Tests, screenshots, and development requirements stay in the repository.
           EOF
