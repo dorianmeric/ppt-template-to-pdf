@@ -7,7 +7,52 @@
 
 # ppt-template-to-pdf
 
-`ppt_template_to_pdf.py` fills a PowerPoint template with data from a YAML file. The script saves the filled deck as `.pptx` and exports the same deck to `.pdf`.
+**A Python script to update a PowerPoint template with variables — fill a `.pptx` deck from a YAML file, then export it to PDF.**
+
+`ppt_template_to_pdf.py` takes a PowerPoint template, replaces the placeholders with values from a YAML data file, saves the filled deck as `.pptx`, and exports the same deck to `.pdf`. It is a command-line tool and a Python module, so it works by hand, from a script, from a scheduled job, or in CI.
+
+People find this repo looking for:
+
+- a **script to update PowerPoint with variables**
+- a **PowerPoint template updated dynamically** at runtime
+- **how to update PowerPoint in Python** without losing the template's design
+- how to do a **mail merge for PowerPoint** (`{{PLACEHOLDER}}` → real values)
+- how to **fill a PPTX template from Excel, YAML, JSON, or a database**
+- how to **generate PowerPoint slides programmatically** and ship them as PDF
+
+That is exactly what this does. No PowerPoint add-in, no VBA, no Office 365 subscription on the build machine (except for the optional PDF/legacy-file step).
+
+**Quick start**
+
+```
+python -m pip install -r requirements.txt
+python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"
+```
+
+Output:
+
+```
+Template - Deal data - 2026-11-26.pptx
+Template - Deal data - 2026-11-26.pdf
+```
+
+## Contents
+
+- [What the script does](#what-the-script-does)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Use](#use)
+- [Check the template first](#check-the-template-first)
+- [Prepare the template](#prepare-the-template)
+- [HTML inside YAML strings](#html-inside-yaml-strings)
+- [YAML format](#yaml-format)
+- [Use it from Python](#use-it-from-python)
+- [Troubleshooting](#troubleshooting)
+- [FAQ: update PowerPoint with Python](#faq-update-powerpoint-with-python)
+- [How this compares to other tools](#how-this-compares-to-other-tools)
+- [Search terms](#search-terms)
+- [Run the tests](#run-the-tests)
+- [License](#license)
 
 ## What the script does
 
@@ -18,6 +63,8 @@
 - Saves a new `.pptx` file. The template file is never modified.
 - Converts a legacy `.ppt` or `.pot` template to `.pptx` first, with the installed PowerPoint.
 - Exports the new `.pptx` to PDF with the installed desktop PowerPoint. Use `--no-pdf` to skip this step.
+
+In other words: **one template, one data file, any number of decks.** The template keeps the branding, the master slides, the fonts and the layout; only the text changes.
 
 Output names use the template name, the YAML name, and today's date:
 
@@ -41,7 +88,7 @@ Pass `--overwrite` to replace the earlier files instead.
 - Legacy `.ppt` and `.pot` templates: Windows, PowerPoint, and `pywin32`. `python-pptx` cannot read the old binary format, so the script asks PowerPoint to convert the file first. This applies even with `--no-pdf`.
 - PDF export: Windows, a desktop install of Microsoft PowerPoint, and `pywin32`. The Microsoft Store, web, and Mac versions of PowerPoint do not expose the COM interface. Linux and macOS work with `--no-pdf`.
 
-## Install dependencies
+## Install
 
 ```
 python -m pip install -r requirements.txt
@@ -188,6 +235,8 @@ Legacy `.ppt` and `.pot` files are converted to `.pptx` in a temporary folder wi
 
 ## HTML inside YAML strings
 
+Write formatting in the data file instead of clicking through PowerPoint. Values may contain a small set of HTML tags; the script turns them into real PowerPoint runs, paragraphs and bullets.
+
 Supported tags:
 
 - `b`, `strong`: bold.
@@ -310,7 +359,39 @@ Paragraph and run formatting that the YAML does not set comes from the first par
 
 Unknown keys are rejected rather than ignored. A typo like `colourr` reports `did you mean 'colour'?`.
 
-## What can go wrong
+## Use it from Python
+
+The script is a normal importable module. Call `main()` with the same arguments you would pass on the command line:
+
+```python
+from ppt_template_to_pdf import main
+
+exit_code = main(["Template.pptx", "Deal data.yaml", "--no-pdf", "-q"])
+```
+
+Use that to fill a template inside an existing ETL job, a Flask view, a Django management command, or a notebook.
+
+A loop over a spreadsheet makes one deck per row:
+
+```python
+import yaml
+from pathlib import Path
+from ppt_template_to_pdf import main
+
+rows = [
+    {"CLIENT_NAME": "Example Energy Pte. Ltd.", "TRANSACTION_TITLE": "Project Sophia"},
+    {"CLIENT_NAME": "Northwind Ports Ltd.", "TRANSACTION_TITLE": "Project Harbour"},
+]
+
+for index, row in enumerate(rows, start=1):
+    data_file = Path(f"deal-{index}.yaml")
+    data_file.write_text(yaml.safe_dump(row, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    main(["Template.pptx", str(data_file), "--output-dir", "Output", "--no-pdf"])
+```
+
+If you need lower-level control, `python-pptx` is the library underneath and everything here is plain Python: open the presentation, walk the shapes, set `text_frame.text`, save. This repo adds the YAML layer, the token matching, the formatting rules and the PDF export on top of that.
+
+## Troubleshooting
 
 | Message or symptom | Cause | Fix |
 | --- | --- | --- |
@@ -347,9 +428,62 @@ Unknown keys are rejected rather than ignored. A typo like `colourr` reports `di
 | Text overflows the box | The template box is too small. | Enlarge the box or enable autofit in the template. |
 | PDF fonts differ from the template | A template font is not installed on this machine. | Install the font, or save the template with an available font. |
 
-## Exit codes in scripts
-
 The script never prints a traceback for expected problems. It prints `ERROR: ...` to stderr and returns a code from the table above. Check `$LASTEXITCODE` in PowerShell and `$?` in Bash.
+
+## FAQ: update PowerPoint with Python
+
+**How do I update PowerPoint text with Python?**
+Install `python-pptx`, open the file with `Presentation("Template.pptx")`, walk `slide.shapes`, and set `shape.text_frame.text`. That is the low-level path. This repo wraps it: you keep the template, put the values in a YAML file, and run one command. See [What the script does](#what-the-script-does).
+
+**Is there a script to update a PowerPoint template with variables?**
+Yes — that is what `ppt_template_to_pdf.py` is. Variables are top-level YAML keys; the matching shape name or `{{token}}` in the deck is replaced with the value.
+
+**Can a PowerPoint template be updated dynamically, at runtime?**
+Yes. The script is a single command with a meaningful exit code, so you can call it from Python, PowerShell, Bash, a cron job, Task Scheduler, GitHub Actions, Azure Pipelines, or Jenkins. Generate the YAML from your database or API, then fill the template.
+
+**How do I replace `{{PLACEHOLDER}}` tokens in a PPTX file?**
+Name the shapes with the placeholder text or type the tokens directly into the text boxes, then pass a YAML mapping of token → value. `--list-fields` shows which tokens the template already contains.
+
+**How do I do a mail merge in PowerPoint?**
+PowerPoint has no built-in mail merge for slides. The usual workaround is one YAML file per record plus this script in a loop — see [Use it from Python](#use-it-from-python).
+
+**Can I generate PowerPoint slides from Excel or a database?**
+Yes. Export each row to YAML (or build the YAML in Python), then call the script once per row. The template's design, master slides and fonts are reused every time.
+
+**Does it keep my template's formatting?**
+Yes. The script writes text into existing boxes and takes unset paragraph and run formatting from the first paragraph and first run of that box, so the template's look stays. Explicit `bold`, `colour`, `size`, `bullet` and `align` values in the YAML override it.
+
+**Do I need Microsoft PowerPoint installed?**
+Only for PDF export and for converting legacy `.ppt` / `.pot` templates. With `--no-pdf` and a `.pptx` template, `python-pptx` alone is enough — no Office, no Windows.
+
+**Does it work on macOS or Linux?**
+The PPTX step does. Add `--no-pdf`; PDF export uses the Windows COM interface of desktop PowerPoint. On Linux, convert the result with `soffice --headless --convert-to pdf "deck.pptx"`.
+
+**Can it insert images, charts or tables?**
+Not currently. The script fills text boxes and text frames, including grouped shapes. Tables and pictures have no text frame, so they are skipped. Use `python-pptx` directly for those, or a placeholder image with the same idea.
+
+**Can I fill dozens of fields at once?**
+Yes. One YAML file can hold every field for every slide. The IDs are matched across the whole presentation, including shapes inside groups.
+
+**Is there a way to check the template without running a real fill?**
+`--list-fields` lists every text shape and token, and `--dry-run -v` reports the planned matches and writes nothing.
+
+## How this compares to other tools
+
+| Approach | What it gives you | Trade-off |
+| --- | --- | --- |
+| This repo (`ppt_template_to_pdf.py`) | Command line, YAML data file, `{{token}}` and shape-name matching, formatting, PPTX + PDF output, clear errors | Text fields only, no images or charts |
+| `python-pptx` alone | Full control over shapes, tables, images, charts | You write and maintain the fill loop, the matching and the error handling |
+| `python-pptx` + Jinja2 templates | Slide duplication and loops | You design the mapping and the formatting layer yourself |
+| `docxtpl` | Great template filling — for Word `.docx` | Does not handle PowerPoint files |
+| PowerPoint "Reuse Slides" / manual slides | No code | Not repeatable, not dynamic |
+| Office Scripts / Power Automate | Cloud automation | Needs a Microsoft 365 licence and the cloud, and PowerPoint coverage is limited |
+
+If your input is a spreadsheet and your output is a set of branded decks plus PDFs, this script is the short path.
+
+## Search terms
+
+Variables, placeholders, tokens, mail merge, templating, data merge, python-pptx wrapper, pptx template filler, PowerPoint automation, PowerPoint generation, PPTX to PDF, `.potx` template, `.pptm`, `python-pptx` text replacement, replace text in PowerPoint with Python, fill PowerPoint template from YAML, fill PowerPoint template from Excel, generate PowerPoint report in Python, dynamic PowerPoint decks, batch PowerPoint generation, PowerPoint CLI.
 
 ## Run the tests
 
