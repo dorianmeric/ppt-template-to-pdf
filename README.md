@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="ppt-template-to-pdf" width="132">
+  </picture>
+</p>
+
 # ppt-template-to-pdf
 
 `ppt_template_to_pdf.py` fills a PowerPoint template with data from a YAML file. The script saves the filled deck as `.pptx` and exports the same deck to `.pdf`.
