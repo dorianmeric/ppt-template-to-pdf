@@ -161,7 +161,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
 
-__version__ = "1.9.1"
+__version__ = "1.9.2"
 
 PP_SAVE_AS_PDF = 32
 PP_SAVE_AS_OPEN_XML_PRESENTATION = 24
