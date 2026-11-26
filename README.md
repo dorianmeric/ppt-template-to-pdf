@@ -786,6 +786,8 @@ git push origin main --tags
 
 To release without pushing a tag by hand, run the workflow from the Actions tab with the version as the input; it creates the `v` tag for you. Tick `draft` to review the release before it goes out.
 
+The workflow runs the test suite first, so a broken build never becomes a release. A tag can be released once: to redo one, delete its release and tag, then push the tag again.
+
 ## Run the tests
 
 ```

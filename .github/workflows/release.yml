@@ -66,6 +66,12 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "Releasing version $version as tag v$version"
 
+      - name: Run the tests
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet -r requirements-dev.txt
+          python -m pytest -q
+
       - name: Build the zip
         env:
           VERSION: ${{ steps.meta.outputs.version }}
