@@ -713,6 +713,69 @@ def write_data(tmp_path: Path, text: str) -> Path:
     return path
 
 
+def test_progress_is_printed_by_default(tmp_path: Path, capsys) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_data(tmp_path, "CLIENT_NAME: Example\n")
+    output = tmp_path / "out"
+    assert subject.main([str(template), str(data), "-o", str(output), "--no-pdf"]) == 0
+
+    printed = capsys.readouterr().out
+    assert "Reading data.yaml" in printed
+    assert "Opening Template.pptx" in printed
+    assert "Searching" in printed
+    assert "Matched 1 ID to 1 text shape" in printed
+    assert "Writing 1 value into 1 text shape" in printed
+    assert "Created PPTX:" in printed
+
+
+def test_quiet_run_prints_nothing_on_success(tmp_path: Path, capsys) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_data(tmp_path, "CLIENT_NAME: Example\n")
+    output = tmp_path / "out"
+    assert subject.main([str(template), str(data), "-o", str(output), "--no-pdf", "-q"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_verbose_run_lists_each_write(tmp_path: Path, capsys) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_data(tmp_path, "CLIENT_NAME: Example\n")
+    output = tmp_path / "out"
+    args = [str(template), str(data), "-o", str(output), "--no-pdf", "-v"]
+    assert subject.main(args) == 0
+
+    printed = capsys.readouterr().out
+    assert "left unchanged: slide 1" in printed
+    assert "CLIENT_NAME -> slide 1 'CLIENT_NAME' (shape name)" in printed
+    assert "PDF export skipped" in printed
+
+
+def test_dry_run_reports_the_properties_it_would_set(tmp_path: Path, capsys) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    data = write_data(
+        tmp_path,
+        "CLIENT_NAME: Example\nPROPERTIES:\n  title: Q3\n  author: Deal team\n",
+    )
+    assert subject.main([str(template), str(data), "--dry-run"]) == 0
+
+    printed = capsys.readouterr().out
+    assert "Dry run: 1 ID matched 1 text shape" in printed
+    assert "2 document properties would be set" in printed
+    assert "Nothing was written." in printed
+
+
+def test_reporter_flushes_each_line(monkeypatch) -> None:
+    recorded: dict = {}
+
+    def fake_print(*args, **kwargs):
+        recorded["args"] = args
+        recorded["kwargs"] = kwargs
+
+    monkeypatch.setattr("builtins.print", fake_print)
+    subject.Reporter().info("progress")
+    assert recorded["args"] == ("progress",)
+    assert recorded["kwargs"]["flush"] is True
+
+
 def test_no_pdf_writes_only_pptx(tmp_path: Path) -> None:
     template = build_template(tmp_path / "Template.pptx")
     data = write_data(tmp_path, "CLIENT_NAME: Example\n")

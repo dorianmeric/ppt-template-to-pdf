@@ -17,7 +17,7 @@ import time
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time as dt_time, timezone
 from html.parser import HTMLParser
 from importlib.util import find_spec
 from pathlib import Path
@@ -154,27 +154,39 @@ class ExportError(ScriptError):
     exit_code = 4
 
 
+def count_label(count: int, singular: str, plural: Optional[str] = None) -> str:
+    """Return '1 shape' or '3 shapes' for progress messages."""
+    word = singular if count == 1 else (plural or f"{singular}s")
+    return f"{count} {word}"
+
+
 @dataclass
 class Reporter:
-    """Send progress and diagnostics to the console, honouring -v and -q."""
+    """Send progress and diagnostics to the console, honouring -v and -q.
+
+    Every write is flushed straight away. Python buffers stdout when it is a
+    pipe or a file, and the PowerPoint export can take several seconds, so
+    without the flush a run that is working normally looks like a hang until
+    the process exits.
+    """
 
     quiet: bool = False
     verbose: bool = False
 
     def info(self, message: str) -> None:
         if not self.quiet:
-            print(message)
+            print(message, flush=True)
 
     def detail(self, message: str) -> None:
         if self.verbose and not self.quiet:
-            print(message)
+            print(message, flush=True)
 
     def warning(self, message: str) -> None:
         if not self.quiet:
-            print(f"WARNING: {message}", file=sys.stderr)
+            print(f"WARNING: {message}", file=sys.stderr, flush=True)
 
     def error(self, message: str) -> None:
-        print(f"ERROR: {message}", file=sys.stderr)
+        print(f"ERROR: {message}", file=sys.stderr, flush=True)
 
 
 @dataclass
@@ -1031,7 +1043,7 @@ def coerce_property_datetime(value: Any, name: str, where: str) -> datetime:
     if isinstance(value, datetime):
         parsed = value
     elif isinstance(value, date):
-        parsed = datetime.combine(value, time.min)
+        parsed = datetime.combine(value, dt_time.min)
     elif isinstance(value, str):
         text = value.strip()
         if not text:
@@ -1735,17 +1747,64 @@ def run_job(job: Job, reporter: Reporter) -> int:
 
 
 def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
-    """Fill the template, set document properties, save the PPTX, export PDF."""
+    """Fill the template, set document properties, save the PPTX, export PDF.
+
+    The work is done in seven steps, and each one prints a short line first, so
+    a slow run shows where it is instead of looking stuck:
+
+    1. Read the data file and split off the reserved PROPERTIES block.
+    2. Open the template and collect every text shape it can reach.
+    3. Match every ID against every shape. Nothing is written yet, so a typo
+       still ends the run before any file is created.
+    4. Stop after the report when --dry-run was passed.
+    5. Reserve the output names, then write the matched text and the document
+       properties into the in-memory presentation.
+    6. Save the PPTX.
+    7. Export the PDF with desktop PowerPoint, usually the slowest step.
+    """
+
+    # 1. Data file. Shape fields and the optional PROPERTIES block share one
+    #    YAML or JSON file; split them so matching only ever sees shape IDs.
     assert job.data is not None
+    reporter.info(f"Reading {job.data.name}")
     loaded = load_data_file(job.data)
     label = data_format_label(job.data)
     data, property_block = split_document_properties(loaded)
     properties = normalise_document_properties(property_block)
+    reporter.detail(
+        f"  {count_label(len(data), 'shape field')}, "
+        f"{count_label(len(properties), 'document property', 'document properties')}"
+    )
+
+    # 2. Template. collect_fields walks the slides, the layouts, and the
+    #    masters, so the matching step gets the full list of shapes in one go.
+    reporter.info(f"Opening {template_path.name}")
     presentation = open_presentation(template_path)
     fields = collect_fields(presentation)
+    slide_shapes = sum(1 for template_field in fields if template_field.region == "slide")
+    reporter.detail(
+        f"  {count_label(slide_shapes, 'text shape')} on slides, "
+        f"{len(fields) - slide_shapes} on layouts and masters"
+    )
+    if data:
+        reporter.info(
+            f"Searching {count_label(len(fields), 'text shape')} "
+            f"for {count_label(len(data), 'ID')}"
+        )
+
+    # 3. Matching. This step only reads: it decides which shape receives which
+    #    value and reports the gaps. A missing ID raises exit code 3 here, which
+    #    is why the deck and the data file are checked before anything is saved.
     plan = resolve_plan(fields, data, reporter, label)
     if plan.missing:
         raise FieldMatchError(build_missing_message(plan.missing, fields, label))
+    if data:
+        reporter.info(
+            f"Matched {count_label(len(plan.matches), 'ID')} "
+            f"to {count_label(plan.field_count, 'text shape')}"
+        )
+
+    # Verbose detail: shapes that stay as they are, after the matches above.
     unfilled = [template_field for template_field in fields if not template_field.matched_by]
     for template_field in unfilled:
         if template_field.region == "slide":
@@ -1753,28 +1812,55 @@ def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
     inherited_unfilled = sum(1 for template_field in unfilled if template_field.region != "slide")
     if inherited_unfilled:
         reporter.detail(f"  {inherited_unfilled} unmatched layout and master text shape(s)")
-    reporter.detail(f"  {len(plan.matches)} {label} ID(s) matched {plan.field_count} template field(s)")
-    for name, value in properties.items():
-        shown = value.isoformat() if isinstance(value, datetime) else value
-        reporter.detail(f"  document property {name} = {shown!r}")
+
+    # 4. Dry run. Everything has been checked and reported, so stop before the
+    #    output folder or any file is touched.
     if job.dry_run:
-        reporter.info(
-            f"Dry run: {len(plan.matches)} {label} ID(s) matched {plan.field_count} template field(s). "
-            "Nothing was written."
-        )
+        parts = [
+            f"Dry run: {count_label(len(plan.matches), 'ID')} matched "
+            f"{count_label(plan.field_count, 'text shape')}"
+        ]
+        if properties:
+            parts.append(
+                f"{count_label(len(properties), 'document property', 'document properties')} "
+                "would be set"
+            )
+        reporter.info("; ".join(parts) + ". Nothing was written.")
         return 0
+
+    # 5. Output names are reserved first, so a clash or a path that is too long
+    #    is reported before the slower work starts. Then the text and the
+    #    metadata are written into the open presentation, in memory only.
     output_pptx, output_pdf = resolve_output_paths(job, reporter)
     check_path_length([output_pptx, output_pdf] if job.export_pdf else [output_pptx], reporter)
+    if plan.field_count:
+        reporter.info(
+            f"Writing {count_label(plan.field_count, 'value')} "
+            f"into {count_label(plan.field_count, 'text shape')}"
+        )
     try:
         fill_presentation(plan, data, reporter, label)
     except ValueError as error:
         raise InputError(str(error)) from None
+    if properties:
+        reporter.info(f"Setting {count_label(len(properties), 'document property', 'document properties')}")
+        for name, value in properties.items():
+            shown = value.isoformat() if isinstance(value, datetime) else value
+            reporter.detail(f"  document property {name} = {shown!r}")
     apply_document_properties(presentation.core_properties, properties)
+
+    # 6. Save the filled deck under its new name. The template on disk is never
+    #    written to, so a failed run cannot damage it.
     save_presentation(presentation, output_pptx)
     reporter.info(f"Created PPTX: {output_pptx}")
+
+    # 7. PDF. This drives desktop PowerPoint through COM, so it takes seconds and
+    #    is the step that most looks like a hang without a line before it.
     if job.export_pdf:
+        reporter.info("Exporting PDF with PowerPoint (this can take a few seconds)")
+        started = time.monotonic()
         export_pptx_to_pdf(output_pptx, output_pdf)
-        reporter.info(f"Created PDF:  {output_pdf}")
+        reporter.info(f"Created PDF:  {output_pdf} ({time.monotonic() - started:.1f}s)")
     else:
         reporter.detail("  PDF export skipped (--no-pdf)")
     return 0
