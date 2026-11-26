@@ -147,6 +147,8 @@ python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" --dry-run -v
 3. Double-click a shape name in the pane and rename it to the field ID.
 4. Use the same ID as the top-level YAML key.
 
+![Home => Arrange => Selection Pane...](assets/screenshots/home-arrange-selectionpane.png)
+
 ![PowerPoint with the Selection Pane open. The shape renamed to TRANSACTION_TITLE is selected, and the same name is highlighted in the pane.](assets/screenshots/selection-pane.png)
 
 Names you can use:
