@@ -771,21 +771,21 @@ Each one is a single file: the CPython runtime, the standard library, python-ppt
 
 ```
 # Windows
-ppt-template-to-pdf-1.9.0-windows-x64.exe --help
-ppt-template-to-pdf-1.9.0-windows-x64.exe "Template.pptx" "Deal data.yaml"
+ppt-fill-1.9.1-windows-x64.exe --help
+ppt-fill-1.9.1-windows-x64.exe "Template.pptx" "Deal data.yaml"
 
 # macOS and Linux: restore the executable bit first if the download lost it
-chmod +x ppt-template-to-pdf-1.9.0-linux-x86_64 ./ppt-template-to-pdf-1.9.0-linux-x86_64
-./ppt-template-to-pdf-1.9.0-linux-x86_64 "Template.pptx" "Deal data.yaml"
-./ppt-template-to-pdf-1.9.0-macos-arm64 "Template.pptx" --list-fields
-./ppt-template-to-pdf-1.9.0-linux-x86_64 "Template.pptx" "Deal data.json" -o Output --name "Q3 update"
+chmod +x ./ppt-fill-1.9.1-linux-x86_64
+./ppt-fill-1.9.1-linux-x86_64 "Template.pptx" "Deal data.yaml"
+./ppt-fill-1.9.1-macos-arm64 "Template.pptx" --list-fields
+./ppt-fill-1.9.1-linux-x86_64 "Template.pptx" "Deal data.json" -o Output --name "Q3 update"
 ```
 
 Every flag, exit code, and message is the same as the Python version. Three things are worth knowing:
 
 - **PDF export is Windows-only.** It drives desktop PowerPoint over COM, so on macOS and Linux the binary fills the `.pptx` and stops there. Add `--no-pdf` and convert afterwards with LibreOffice: `soffice --headless --convert-to pdf "deck.pptx"`. Legacy `.ppt` and `.pot` templates are Windows-only for the same reason.
 - **One file, unpacked at start.** These are Nuitka one-file builds, so each one unpacks itself into the temp folder (`%TEMP%`, `$TMPDIR`, `/tmp`) before running. That costs a second or two on the first start and leaves nothing behind.
-- **Downloaded binaries may need a nudge.** A file fetched through a browser can lose the executable bit on macOS and Linux (`chmod +x`), and macOS may quarantine it: `xattr -d com.apple.quarantine ppt-template-to-pdf-1.9.0-macos-arm64`. The macOS builds are unsigned, so prefer `curl -LO` when you want to skip that.
+- **Downloaded binaries may need a nudge.** A file fetched through a browser can lose the executable bit on macOS and Linux (`chmod +x`), and macOS may quarantine it: `xattr -d com.apple.quarantine ppt-fill-1.9.1-macos-arm64`. The macOS builds are unsigned, so prefer `curl -LO` when you want to skip that.
 
 Windows builds work with either bitness of Office, because PowerPoint is an out-of-process COM server: a 32-bit `ppt-template-to-pdf` can export a PDF through 64-bit Office and the other way round.
 
@@ -819,7 +819,7 @@ See [Pre-built executables](#pre-built-executables) for requirements and usage.
 The zip holds only what a user needs, laid out inside one folder:
 
 ```
-ppt-template-to-pdf-1.9.0/
+ppt-template-to-pdf-1.9.1/
   ppt_template_to_pdf.py
   README.md
   pyproject.toml
@@ -840,13 +840,13 @@ It writes `dist/ppt-template-to-pdf-<version>.zip`, reads the version from `pypr
 Cut a release by pushing a tag that matches the version:
 
 ```
-git tag v1.9.0
+git tag v1.9.1
 git push origin main --tags
 ```
 
 `.github/workflows/release.yml` then does the rest:
 
-- **version** works out the tag and checks it looks like `1.9.0`.
+- **version** works out the tag and checks it looks like `1.9.1`.
 - **bundle** runs the test suite, builds the zip, fails if anything unexpected slipped in, installs the zip in a clean runner and runs `ppt-template-to-pdf --version`.
 - **windows** builds the executable twice with Nuitka, once per architecture (`x64`, `x86`), on `windows-latest`.
 - **macos** builds it on `macos-latest` (Apple silicon) and `macos-15-intel`.
