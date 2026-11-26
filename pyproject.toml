@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ppt-template-to-pdf"
-version = "1.6.0"
+version = "1.7.0"
 description = "Fill a PowerPoint template from YAML or JSON and export the result to PDF."
 readme = "README.md"
 requires-python = ">=3.10"

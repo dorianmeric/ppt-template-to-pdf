@@ -32,7 +32,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 PP_SAVE_AS_PDF = 32
 PP_SAVE_AS_OPEN_XML_PRESENTATION = 24
@@ -1812,6 +1812,9 @@ def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
     inherited_unfilled = sum(1 for template_field in unfilled if template_field.region != "slide")
     if inherited_unfilled:
         reporter.detail(f"  {inherited_unfilled} unmatched layout and master text shape(s)")
+    for name, value in properties.items():
+        shown = value.isoformat() if isinstance(value, datetime) else value
+        reporter.detail(f"  document property {name} = {shown!r}")
 
     # 4. Dry run. Everything has been checked and reported, so stop before the
     #    output folder or any file is touched.
@@ -1844,9 +1847,6 @@ def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
         raise InputError(str(error)) from None
     if properties:
         reporter.info(f"Setting {count_label(len(properties), 'document property', 'document properties')}")
-        for name, value in properties.items():
-            shown = value.isoformat() if isinstance(value, datetime) else value
-            reporter.detail(f"  document property {name} = {shown!r}")
     apply_document_properties(presentation.core_properties, properties)
 
     # 6. Save the filled deck under its new name. The template on disk is never

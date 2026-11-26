@@ -53,6 +53,7 @@ Template - Deal data - 2026-11-26.pdf
   - [Requirements](#requirements)
   - [Install](#install)
   - [Use](#use)
+    - [What a run prints](#what-a-run-prints)
   - [Check the template first](#check-the-template-first)
   - [Prepare the template](#prepare-the-template)
     - [Method 1 (recommended): shape names](#method-1-recommended-shape-names)
@@ -201,6 +202,27 @@ Flags:
 | `--version` | Print the version and exit. |
 
 Quote paths that contain spaces.
+
+### What a run prints
+
+Each step announces itself before it starts, so a slow run is never a blank screen. The PDF step is the one that usually takes seconds, and it says so:
+
+```
+$ python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml"
+Reading Deal data.yaml
+Opening Template.pptx
+Searching 67 text shapes for 3 IDs
+Matched 3 IDs to 3 text shapes
+Writing 3 values into 3 text shapes
+Setting 2 document properties
+Created PPTX: Output\Template - Deal data - 2026-11-26.pptx
+Exporting PDF with PowerPoint (this can take a few seconds)
+Created PDF:  Output\Template - Deal data - 2026-11-26.pdf (3.1s)
+```
+
+- Every line is flushed as it is printed, so the output streams into a terminal, a log file, or a CI console while the run is still going.
+- `-v` adds the detail behind those counts: every field that is written with its slide, layout, or master, every shape left unchanged, and every document property with its value.
+- `-q` prints errors only, which is what you want when a parent script already logs the job.
 
 Exit codes:
 
@@ -705,6 +727,9 @@ Yes. Slides, slide layouts, and slide masters are all searched. A field placed o
 
 **What happens if the same field appears more than once in the deck?**
 Every occurrence is filled with the same value: the same shape name on several slides, the same token repeated in one text box or across slides, and a field that exists on both a slide and its layout. Nothing stops at the first match, and the verbose output lists each write.
+
+**Why does the script seem to hang during the PDF step?**
+Exporting with desktop PowerPoint takes a few seconds, and on a large deck it can take longer. The script prints `Exporting PDF with PowerPoint (this can take a few seconds)` before it starts, flushes it immediately, and reports the elapsed time when the PDF is written. If the line does not advance for a minute or more, close other Office windows and check that no dialog is waiting behind them — a hidden prompt blocks the export.
 
 **Is there a way to check the template without running a real fill?**
 `--list-fields` lists every text shape and token, and `--dry-run -v` reports the planned matches and writes nothing.
