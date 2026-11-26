@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-# ppt-template-to-pdf
+# Powerpoint-Template-to-PDF
 
 **A Python script to update a PowerPoint template with variables — fill a `.pptx` deck from a YAML or JSON file, then export it to PDF.**
 
@@ -49,7 +49,7 @@ Template - Deal data - 2026-11-26.pdf
 
 ## Contents
 
-- [ppt-template-to-pdf](#ppt-template-to-pdf)
+- [Powerpoint-Template-to-PDF](#powerpoint-template-to-pdf)
   - [Contents](#contents)
   - [What the script does](#what-the-script-does)
   - [Requirements](#requirements)
@@ -761,10 +761,10 @@ Every release carries two pre-built Windows executables, so a user with no Pytho
 
 | File | Runs on |
 | --- | --- |
-| `ppt-fill-<version>-x64.exe` | 64-bit Windows with 64-bit Office. The usual choice. |
-| `ppt-fill-<version>-x86.exe` | 32-bit Windows, or 32-bit Office on 64-bit Windows. |
+| `ppt-fill-<version>-x64.exe` | 64-bit Windows. The usual choice. |
+| `ppt-fill-<version>-x86.exe` | 32-bit Windows, and 64-bit Windows too. |
 
-Pick the build that matches the **bitness of your Office installation**, not just of Windows: a 32-bit program can only automate a 32-bit copy of PowerPoint, so the `x86` build cannot export a PDF through 64-bit Office and the other way round. Check with File > Account > About PowerPoint; the version line says 32-bit or 64-bit. Filling the `.pptx` and the `--no-pdf` path work either way.
+Both automate PowerPoint the same way, whatever the bitness of the Office install: PowerPoint is an out-of-process COM server, so a 32-bit `ppt-fill` can export a PDF through 64-bit Office, and the other way round. Take `x64` unless you are on 32-bit Windows or a tool of yours insists on a 32-bit binary.
 
 Each one is a single file: the CPython runtime, the standard library, python-pptx, PyYAML, lxml, Pillow, XlsxWriter, and pywin32 are all inside. Copy it anywhere, open a terminal, and run it like the script:
 

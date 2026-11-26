@@ -222,11 +222,11 @@ jobs:
 
           ## Windows executable (no Python needed)
 
-          - \`ppt-fill-$VERSION-x64.exe\` - 64-bit Windows, for 64-bit Office
-          - \`ppt-fill-$VERSION-x86.exe\` - 32-bit Windows and 32-bit Office
+          - \`ppt-fill-$VERSION-x64.exe\` - 64-bit Windows
+          - \`ppt-fill-$VERSION-x86.exe\` - 32-bit Windows, and 64-bit Windows too
 
-          Pick the build that matches the bitness of the installed Office, because a
-          32-bit program can only automate 32-bit PowerPoint. Each one is a single file with the Python runtime and every dependency
+          Both can drive PowerPoint whatever its bitness, because PowerPoint is an
+          out-of-process COM server. Each one is a single file with the Python runtime and every dependency
           inside, built with Nuitka. Copy it anywhere and run it from a terminal:
 
               ppt-fill-$VERSION-x64.exe --help
