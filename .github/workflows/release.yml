@@ -5,11 +5,11 @@ name: Release
 # the lean source bundle plus a pre-built executable for each platform:
 #
 #   ppt-template-to-pdf-<version>.zip    the lean source bundle
-#   ppt-template-to-pdf-<version>-windows-x64.exe   Windows, 64-bit
-#   ppt-template-to-pdf-<version>-windows-x86.exe   Windows, 32-bit
-#   ppt-template-to-pdf-<version>-macos-arm64       macOS on Apple silicon
-#   ppt-template-to-pdf-<version>-macos-x86_64      macOS on Intel
-#   ppt-template-to-pdf-<version>-linux-x86_64      Linux, 64-bit
+#   ppt-fill-<version>-windows-x64.exe    Windows, 64-bit
+#   ppt-fill-<version>-windows-x86.exe    Windows, 32-bit
+#   ppt-fill-<version>-macos-arm64        macOS on Apple silicon
+#   ppt-fill-<version>-macos-x86_64       macOS on Intel
+#   ppt-fill-<version>-linux-x86_64       Linux, 64-bit
 #
 # The executables are built with Nuitka (Nuitka-Action), one per architecture,
 # and each one is smoke tested on its own runner before it is published.
@@ -157,7 +157,7 @@ jobs:
           script-name: ppt_template_to_pdf.py
           mode: onefile
           output-dir: dist
-          output-file: ppt-template-to-pdf-${{ needs.version.outputs.version }}-windows-${{ matrix.arch }}.exe
+          output-file: ppt-fill-${{ needs.version.outputs.version }}-windows-${{ matrix.arch }}.exe
           windows-icon-from-ico: assets/logo.ico
           windows-console-mode: force
           include-package: win32com
@@ -176,7 +176,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
-          $exe = "dist/ppt-template-to-pdf-$env:VERSION-windows-$env:ARCH.exe"
+          $exe = "dist/ppt-fill-$env:VERSION-windows-$env:ARCH.exe"
           if (-not (Test-Path $exe)) { throw "Nuitka did not produce $exe" }
           Get-Item $exe | Select-Object Name, Length
           & $exe --version
@@ -230,7 +230,7 @@ jobs:
           script-name: ppt_template_to_pdf.py
           mode: onefile
           output-dir: dist
-          output-file: ppt-template-to-pdf-${{ needs.version.outputs.version }}-macos-${{ matrix.arch }}
+          output-file: ppt-fill-${{ needs.version.outputs.version }}-macos-${{ matrix.arch }}
           include-package-data: pptx
           assume-yes-for-downloads: true
 
@@ -241,7 +241,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          exe="dist/ppt-template-to-pdf-$VERSION-macos-$ARCH"
+          exe="dist/ppt-fill-$VERSION-macos-$ARCH"
           chmod +x "$exe"
           ls -l "$exe"
           sw_vers
@@ -258,7 +258,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: exe-macos-${{ matrix.arch }}
-          path: dist/ppt-template-to-pdf-*-macos-*
+          path: dist/ppt-fill-*-macos-*
           if-no-files-found: error
 
   linux:
@@ -289,7 +289,7 @@ jobs:
           script-name: ppt_template_to_pdf.py
           mode: onefile
           output-dir: dist
-          output-file: ppt-template-to-pdf-${{ needs.version.outputs.version }}-linux-x86_64
+          output-file: ppt-fill-${{ needs.version.outputs.version }}-linux-x86_64
           include-package-data: pptx
           assume-yes-for-downloads: true
 
@@ -299,7 +299,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          exe="dist/ppt-template-to-pdf-$VERSION-linux-x86_64"
+          exe="dist/ppt-fill-$VERSION-linux-x86_64"
           chmod +x "$exe"
           ls -l "$exe"
           file "$exe" || true
@@ -319,7 +319,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: exe-linux-x86_64
-          path: dist/ppt-template-to-pdf-*-linux-*
+          path: dist/ppt-fill-*-linux-*
           if-no-files-found: error
 
   publish:
@@ -353,18 +353,18 @@ jobs:
 
           | File | Runs on |
           | --- | --- |
-          | \`ppt-template-to-pdf-$VERSION-windows-x64.exe\` | Windows, 64-bit |
-          | \`ppt-template-to-pdf-$VERSION-windows-x86.exe\` | Windows, 32-bit, and 64-bit Windows |
-          | \`ppt-template-to-pdf-$VERSION-macos-arm64\` | macOS on Apple silicon (M1 and later) |
-          | \`ppt-template-to-pdf-$VERSION-macos-x86_64\` | macOS on Intel |
-          | \`ppt-template-to-pdf-$VERSION-linux-x86_64\` | Linux, 64-bit |
+          | \`ppt-fill-$VERSION-windows-x64.exe\` | Windows, 64-bit |
+          | \`ppt-fill-$VERSION-windows-x86.exe\` | Windows, 32-bit, and 64-bit Windows |
+          | \`ppt-fill-$VERSION-macos-arm64\` | macOS on Apple silicon (M1 and later) |
+          | \`ppt-fill-$VERSION-macos-x86_64\` | macOS on Intel |
+          | \`ppt-fill-$VERSION-linux-x86_64\` | Linux, 64-bit |
 
           Each one is a single file with the Python runtime and every dependency
           inside, built with Nuitka. Copy it anywhere and run it from a terminal:
 
-              chmod +x ppt-template-to-pdf-$VERSION-linux-x86_64
-              ./ppt-template-to-pdf-$VERSION-linux-x86_64 --help
-              ./ppt-template-to-pdf-$VERSION-linux-x86_64 "Template.pptx" "Deal data.yaml"
+              chmod +x ppt-fill-$VERSION-linux-x86_64
+              ./ppt-fill-$VERSION-linux-x86_64 --help
+              ./ppt-fill-$VERSION-linux-x86_64 "Template.pptx" "Deal data.yaml"
 
           Desktop PowerPoint is needed for PDF export and for reading legacy .ppt
           and .pot templates, and it only exists on Windows. On macOS and Linux the

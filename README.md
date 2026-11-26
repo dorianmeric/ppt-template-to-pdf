@@ -761,11 +761,11 @@ Every release carries a binary for each common platform, so a user with no Pytho
 
 | File | Runs on | Notes |
 | --- | --- | --- |
-| `ppt-template-to-pdf-<version>-windows-x64.exe` | 64-bit Windows | The usual choice on Windows. |
-| `ppt-template-to-pdf-<version>-windows-x86.exe` | 32-bit Windows, and 64-bit Windows | Take it only if you are on 32-bit Windows or a tool of yours insists on a 32-bit binary. |
-| `ppt-template-to-pdf-<version>-macos-arm64` | macOS on Apple silicon (M1 and later) | |
-| `ppt-template-to-pdf-<version>-macos-x86_64` | macOS on Intel | |
-| `ppt-template-to-pdf-<version>-linux-x86_64` | 64-bit Linux | Needs glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10+. |
+| `ppt-fill-<version>-windows-x64.exe` | 64-bit Windows | The usual choice on Windows. |
+| `ppt-fill-<version>-windows-x86.exe` | 32-bit Windows, and 64-bit Windows | Take it only if you are on 32-bit Windows or a tool of yours insists on a 32-bit binary. |
+| `ppt-fill-<version>-macos-arm64` | macOS on Apple silicon (M1 and later) | Needs macOS 11 or newer. |
+| `ppt-fill-<version>-macos-x86_64` | macOS on Intel | Needs macOS 11 or newer. |
+| `ppt-fill-<version>-linux-x86_64` | 64-bit Linux | Needs glibc 2.35 or newer: Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10+. |
 
 Each one is a single file: the CPython runtime, the standard library, python-pptx, PyYAML, lxml, Pillow, XlsxWriter, and (on Windows) pywin32 are all inside. Copy it anywhere, open a terminal, and run it like the script:
 
@@ -808,11 +808,11 @@ Each release publishes six assets:
 | Asset | What it is |
 | --- | --- |
 | `ppt-template-to-pdf-<version>.zip` | The lean source bundle, described below. |
-| `ppt-template-to-pdf-<version>-windows-x64.exe` | Windows, 64-bit. |
-| `ppt-template-to-pdf-<version>-windows-x86.exe` | Windows, 32-bit. |
-| `ppt-template-to-pdf-<version>-macos-arm64` | macOS on Apple silicon. |
-| `ppt-template-to-pdf-<version>-macos-x86_64` | macOS on Intel. |
-| `ppt-template-to-pdf-<version>-linux-x86_64` | Linux, 64-bit. |
+| `ppt-fill-<version>-windows-x64.exe` | Windows, 64-bit. |
+| `ppt-fill-<version>-windows-x86.exe` | Windows, 32-bit. |
+| `ppt-fill-<version>-macos-arm64` | macOS on Apple silicon. |
+| `ppt-fill-<version>-macos-x86_64` | macOS on Intel. |
+| `ppt-fill-<version>-linux-x86_64` | Linux, 64-bit. |
 
 See [Pre-built executables](#pre-built-executables) for requirements and usage.
 
