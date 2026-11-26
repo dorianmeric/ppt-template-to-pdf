@@ -323,6 +323,64 @@ def test_overwrite_flag_reuses_the_name(tmp_path: Path) -> None:
     assert second_pptx == first_pptx
 
 
+def test_resolve_template_accepts_legacy_suffixes(tmp_path: Path) -> None:
+    for name in ("Old.ppt", "Old.pot"):
+        path = tmp_path / name
+        path.write_bytes(b"stub")
+        assert subject.resolve_template(path) == path.resolve()
+
+
+def test_modern_template_is_used_directly(tmp_path: Path, monkeypatch) -> None:
+    template = build_template(tmp_path / "Template.pptx")
+    calls = []
+    monkeypatch.setattr(subject, "convert_with_powerpoint", lambda *a, **k: calls.append(a))
+    with subject.usable_template(template, quiet()) as template_path:
+        assert template_path == template
+    assert calls == []
+
+
+def test_legacy_template_is_converted_and_cleaned_up(tmp_path: Path, monkeypatch) -> None:
+    legacy = tmp_path / "Template.ppt"
+    legacy.write_bytes(b"binary stub")
+    real_deck = build_template(tmp_path / "real.pptx")
+    seen = {}
+
+    def fake_convert(source, target, file_format, action, error_type, hint):
+        seen["source"] = source
+        seen["format"] = file_format
+        target.write_bytes(real_deck.read_bytes())
+
+    monkeypatch.setattr(subject, "convert_with_powerpoint", fake_convert)
+    monkeypatch.setattr(subject, "find_spec", lambda name: object())
+    with subject.usable_template(legacy, quiet()) as template_path:
+        assert template_path != legacy
+        assert template_path.suffix == ".pptx"
+        assert Presentation(str(template_path)).slides
+    assert seen["source"] == legacy
+    assert seen["format"] == subject.PP_SAVE_AS_OPEN_XML_PRESENTATION
+    assert not template_path.exists()
+
+
+def test_legacy_template_without_powerpoint_explains_the_fix(tmp_path: Path, monkeypatch) -> None:
+    legacy = tmp_path / "Template.ppt"
+    legacy.write_bytes(b"binary stub")
+    monkeypatch.setattr(subject, "find_spec", lambda name: None)
+    with pytest.raises(subject.InputError) as info:
+        with subject.usable_template(legacy, quiet()):
+            pass
+    message = str(info.value)
+    assert "Save As" in message
+    assert ".pptx" in message
+
+
+def test_legacy_template_without_powerpoint_exits_two(tmp_path: Path, monkeypatch) -> None:
+    legacy = tmp_path / "Template.ppt"
+    legacy.write_bytes(b"binary stub")
+    data = write_data(tmp_path, "A: b\n")
+    monkeypatch.setattr(subject, "find_spec", lambda name: None)
+    assert subject.main([str(legacy), str(data), "--no-pdf", "-q"]) == 2
+
+
 def test_output_name_contains_names_and_date(tmp_path: Path) -> None:
     pptx_path, pdf_path = subject.resolve_output_paths(make_job(tmp_path), quiet())
     assert pptx_path.name.startswith("Template - Deal data - ")

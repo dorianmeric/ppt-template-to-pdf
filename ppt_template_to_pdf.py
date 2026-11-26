@@ -11,7 +11,9 @@ import argparse
 import difflib
 import re
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date
@@ -29,11 +31,12 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 PP_SAVE_AS_PDF = 32
+PP_SAVE_AS_OPEN_XML_PRESENTATION = 24
 RETRYABLE_COM_ERRORS = {-2147418111, -2147417846}
-EXPORT_ATTEMPTS = 3
+POWERPOINT_ATTEMPTS = 3
 MAX_OUTPUT_PATH_LENGTH = 250
 
 DEFAULT_BULLET_CHAR = "•"
@@ -41,8 +44,22 @@ DEFAULT_NUMBER_FORMAT = "arabicPeriod"
 TRUE_WORDS = {"true", "yes", "on", "1"}
 FALSE_WORDS = {"false", "no", "off", "0"}
 
-SUPPORTED_TEMPLATE_SUFFIXES = {".pptx", ".pptm", ".potx"}
+SUPPORTED_TEMPLATE_SUFFIXES = {".pptx", ".pptm", ".potx", ".ppt", ".pot"}
+LEGACY_TEMPLATE_SUFFIXES = {".ppt", ".pot"}
 SUPPORTED_DATA_SUFFIXES = {".yaml", ".yml"}
+
+PDF_UNAVAILABLE_HINT = (
+    "PDF export needs Windows, desktop PowerPoint, and pywin32. "
+    "Install pywin32 with: python -m pip install pywin32. "
+    "Add --no-pdf to create only the PPTX file."
+)
+LEGACY_TEMPLATE_HINT = (
+    "Reading a .ppt or .pot template needs Windows, desktop PowerPoint, and pywin32, "
+    "because python-pptx cannot read the old binary format. "
+    "Either run the script on Windows with PowerPoint installed, or convert the template once: "
+    "PowerPoint: File > Save As > PowerPoint Presentation (*.pptx). "
+    'LibreOffice: soffice --convert-to pptx "template.ppt"'
+)
 
 HEX_COLOUR_PATTERN = re.compile(r"^#?([0-9A-Fa-f]{6})$")
 TOKEN_SCAN_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
@@ -1049,7 +1066,7 @@ def is_retryable_com_error(error: BaseException) -> bool:
     return com_hresult(error) in RETRYABLE_COM_ERRORS
 
 
-def describe_export_error(error: BaseException, pptx_path: Path) -> str:
+def describe_com_error(error: BaseException, source_path: Path, action: str) -> str:
     """Translate a COM failure into an action the user can take."""
     message = str(error)
     lowered = message.lower()
@@ -1060,29 +1077,34 @@ def describe_export_error(error: BaseException, pptx_path: Path) -> str:
         )
     elif "could not open" in lowered or "cannot open" in lowered:
         hint = (
-            f"PowerPoint could not open {pptx_path}. Close the file, move it out of OneDrive or a "
+            f"PowerPoint could not open {source_path}. Close the file, move it out of OneDrive or a "
             "network share, and unblock it in the file Properties."
         )
     elif isinstance(error, PermissionError) or "permission" in lowered:
-        hint = "The output PDF is locked. Close it in a PDF reader and try again."
+        hint = "The output file is locked. Close it in PowerPoint or a PDF reader and try again."
     else:
         hint = "Check that PowerPoint opens normally, then run the script again."
-    return f"PDF export failed: {message}\n{hint}"
+    return f"{action} failed: {message}\n{hint}"
 
 
-def save_as_pdf(win32_client: Any, pptx_path: Path, pdf_path: Path) -> None:
-    """Open the PPTX in a hidden PowerPoint instance and save it as PDF."""
+def powerpoint_save_as(
+    win32_client: Any,
+    source_path: Path,
+    target_path: Path,
+    file_format: int,
+) -> None:
+    """Open a presentation in a hidden PowerPoint instance and save it in another format."""
     application = None
     presentation = None
     try:
         application = win32_client.DispatchEx("PowerPoint.Application")
         presentation = application.Presentations.Open(
-            str(pptx_path.resolve()),
+            str(source_path.resolve()),
             ReadOnly=True,
             Untitled=False,
             WithWindow=False,
         )
-        presentation.SaveAs(str(pdf_path.resolve()), PP_SAVE_AS_PDF)
+        presentation.SaveAs(str(target_path.resolve()), file_format)
     finally:
         for closer in (
             lambda: presentation.Close() if presentation is not None else None,
@@ -1094,31 +1116,72 @@ def save_as_pdf(win32_client: Any, pptx_path: Path, pdf_path: Path) -> None:
                 pass
 
 
-def export_pptx_to_pdf(pptx_path: Path, pdf_path: Path) -> None:
-    """Export a PPTX to PDF with the installed Windows PowerPoint application."""
+def convert_with_powerpoint(
+    source_path: Path,
+    target_path: Path,
+    file_format: int,
+    action: str,
+    error_type: type[ScriptError],
+    unavailable_hint: str,
+) -> None:
+    """Convert a file with desktop PowerPoint, retrying the COM races."""
     if sys.platform != "win32":
-        raise ExportError("PDF export needs Windows and desktop PowerPoint. Add --no-pdf to skip it.")
+        raise error_type(unavailable_hint)
     try:
         import win32com.client
     except ImportError as error:
-        raise ExportError(
-            "pywin32 is required for PDF export. Install it with: python -m pip install pywin32. "
-            "Add --no-pdf to skip PDF export."
-        ) from error
-    for attempt in range(1, EXPORT_ATTEMPTS + 1):
+        raise error_type(unavailable_hint) from error
+    for attempt in range(1, POWERPOINT_ATTEMPTS + 1):
         try:
-            save_as_pdf(win32com.client, pptx_path, pdf_path)
+            powerpoint_save_as(win32com.client, source_path, target_path, file_format)
             return
         except Exception as error:
-            if attempt == EXPORT_ATTEMPTS or not is_retryable_com_error(error):
-                raise ExportError(describe_export_error(error, pptx_path)) from error
+            if attempt == POWERPOINT_ATTEMPTS or not is_retryable_com_error(error):
+                raise error_type(describe_com_error(error, source_path, action)) from error
             time.sleep(1.5 * attempt)
-    raise ExportError(f"PDF export failed after {EXPORT_ATTEMPTS} attempts.")
+    raise error_type(f"{action} failed after {POWERPOINT_ATTEMPTS} attempts.")
+
+
+def export_pptx_to_pdf(pptx_path: Path, pdf_path: Path) -> None:
+    """Export a PPTX to PDF with the installed Windows PowerPoint application."""
+    convert_with_powerpoint(
+        pptx_path,
+        pdf_path,
+        PP_SAVE_AS_PDF,
+        "PDF export",
+        ExportError,
+        PDF_UNAVAILABLE_HINT,
+    )
+
+
+@contextmanager
+def usable_template(template_path: Path, reporter: Reporter) -> Iterator[Path]:
+    """Yield a .pptx template, converting legacy .ppt and .pot files first."""
+    if template_path.suffix.lower() not in LEGACY_TEMPLATE_SUFFIXES:
+        yield template_path
+        return
+    if sys.platform != "win32" or find_spec("win32com") is None:
+        raise InputError(LEGACY_TEMPLATE_HINT)
+    with tempfile.TemporaryDirectory(prefix="ppt-template-to-pdf-") as work_dir:
+        converted_path = Path(work_dir) / f"{template_path.stem}.pptx"
+        reporter.info(f"Converting {template_path.name} to .pptx with PowerPoint")
+        convert_with_powerpoint(
+            template_path,
+            converted_path,
+            PP_SAVE_AS_OPEN_XML_PRESENTATION,
+            f"Converting {template_path.name}",
+            InputError,
+            LEGACY_TEMPLATE_HINT,
+        )
+        yield converted_path
 
 
 def build_job(arguments: argparse.Namespace) -> Job:
     """Validate the command line and turn it into a job."""
     template = resolve_template(arguments.template)
+    if template.suffix.lower() in LEGACY_TEMPLATE_SUFFIXES:
+        if sys.platform != "win32" or find_spec("win32com") is None:
+            raise InputError(LEGACY_TEMPLATE_HINT)
     if arguments.list_fields:
         return Job(template=template, output_dir=template.parent, list_fields=True)
     if arguments.yaml_file is None:
@@ -1149,12 +1212,18 @@ def build_job(arguments: argparse.Namespace) -> Job:
 
 def run_job(job: Job, reporter: Reporter) -> int:
     """Run the whole pipeline for a validated job."""
-    if job.list_fields:
-        print_field_list(collect_fields(open_presentation(job.template)))
-        return 0
+    with usable_template(job.template, reporter) as template_path:
+        if job.list_fields:
+            print_field_list(collect_fields(open_presentation(template_path)))
+            return 0
+        return fill_template(job, template_path, reporter)
+
+
+def fill_template(job: Job, template_path: Path, reporter: Reporter) -> int:
+    """Fill the template, save the PPTX, and export the PDF."""
     assert job.data is not None
     yaml_data = load_yaml_data(job.data)
-    presentation = open_presentation(job.template)
+    presentation = open_presentation(template_path)
     fields = collect_fields(presentation)
     plan = resolve_plan(fields, yaml_data, reporter)
     if plan.missing:

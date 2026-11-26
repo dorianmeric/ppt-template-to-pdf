@@ -16,6 +16,7 @@
 - Finds every matching text box in the template and replaces its text.
 - Keeps the template's paragraph and character formatting as the default look.
 - Saves a new `.pptx` file. The template file is never modified.
+- Converts a legacy `.ppt` or `.pot` template to `.pptx` first, with the installed PowerPoint.
 - Exports the new `.pptx` to PDF with the installed desktop PowerPoint. Use `--no-pdf` to skip this step.
 
 Output names use the template name, the YAML name, and today's date:
@@ -37,6 +38,7 @@ Pass `--overwrite` to replace the earlier files instead.
 
 - Python 3.10 or later.
 - `python-pptx` and `PyYAML`.
+- Legacy `.ppt` and `.pot` templates: Windows, PowerPoint, and `pywin32`. `python-pptx` cannot read the old binary format, so the script asks PowerPoint to convert the file first. This applies even with `--no-pdf`.
 - PDF export: Windows, a desktop install of Microsoft PowerPoint, and `pywin32`. The Microsoft Store, web, and Mac versions of PowerPoint do not expose the COM interface. Linux and macOS work with `--no-pdf`.
 
 ## Install dependencies
@@ -178,7 +180,9 @@ In the screenshot the shape is still called `TextBox 7`, and the script fills it
 
 Tables and pictures have no text frame, so the script skips them. Put the ID on a real text box.
 
-Templates can be `.pptx`, `.pptm`, or `.potx`. The output is always `.pptx`, so macros are dropped.
+Templates can be `.pptx`, `.pptm`, `.potx`, `.ppt`, or `.pot`. The output is always `.pptx`, so macros are dropped.
+
+Legacy `.ppt` and `.pot` files are converted to `.pptx` in a temporary folder with PowerPoint before the script fills them. The temporary copy is deleted at the end. The output name still uses the original template name, without the old extension.
 
 ## YAML format
 
@@ -309,7 +313,8 @@ Use single quotes around a YAML value that contains HTML with double-quoted attr
 | --- | --- | --- |
 | `Template file not found` | Wrong path or missing file. | Check the path. Quote paths with spaces. |
 | `YAML file not found` | Wrong path. | Check the path and the `.yaml` / `.yml` extension. |
-| `Template must be one of .potx, .pptm, .pptx` | The file is an old `.ppt`. | Open the file in PowerPoint and save it as `.pptx`. |
+| `Template must be one of .pot, .potx, .ppt, .pptm, .pptx` | The file is not a PowerPoint file, or it is a `.pps` / `.ppsx` slide show. | Open the file in PowerPoint and save it as `.pptx`. |
+| `Reading a .ppt or .pot template needs Windows...` | The template is the old binary format and PowerPoint is not available. | Run on Windows with PowerPoint installed, or convert the file once with PowerPoint (File → Save As → `.pptx`) or `soffice --convert-to pptx "template.ppt"`. |
 | `Data file must be .yaml or .yml` | The data file has another extension. | Rename the file or fix the extension. |
 | `Output path is a file, not a folder` | `-o` points at a file. | Pass a folder path, or delete the file. |
 | `YAML COMMENT ERROR` | A double-quoted value contains `colour="#C00000"`. YAML reads `#` as a comment and cuts the value there. | The message prints the fixed line. Wrap the value in single quotes or use a `\|` block. |
