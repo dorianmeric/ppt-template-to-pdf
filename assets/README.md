@@ -7,6 +7,11 @@
 | `logo.png` | 512 × 512 PNG of the light mark. |
 | `banner.html` | Source for `banner.png`. |
 | `banner.png` | 1280 × 640 social preview image. |
+| `screenshots/selection-pane.png` | README screenshot of Method 1, shape names. |
+| `screenshots/token.png` | README screenshot of Method 2, tokens in the text. |
+| `screenshots/demo-template.pptx` | The template used in both screenshots. |
+
+The screenshots are real captures of Microsoft 365 PowerPoint on Windows at 100% display scaling. To retake them, open `screenshots/demo-template.pptx`, show Home → Arrange → Selection Pane, select a shape, and capture the window. Keep both pictures at the same window size so they match.
 
 The mark is a template slide with content bars, plus a PDF page in front of it. The page sits on a ring in the background colour, so the two shapes stay separate at small sizes.
 

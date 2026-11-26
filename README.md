@@ -138,14 +138,16 @@ python ppt_template_to_pdf.py "Template.pptx" "Deal data.yaml" --dry-run -v
 
 ## Prepare the template
 
-Use one of two methods.
+### Method 1 (recommended): shape names
 
-**Method 1 (recommended): shape names.**
+1. Open the template in PowerPoint.
+2. Go to Home → Arrange → Selection Pane.
+3. Double-click a shape name in the pane and rename it to the field ID.
+4. Use the same ID as the top-level YAML key.
 
-- Open the template in PowerPoint.
-- Go to Home → Arrange → Selection Pane.
-- Rename each text box or placeholder to the field ID.
-- Use the same ID as the top-level YAML key.
+![PowerPoint with the Selection Pane open. The shape renamed to TRANSACTION_TITLE is selected, and the same name is highlighted in the pane.](assets/screenshots/selection-pane.png)
+
+Names you can use:
 
 ```
 CLIENT_NAME
@@ -153,12 +155,19 @@ TRANSACTION_TITLE
 KEY_POINTS
 ```
 
-**Method 2: tokens in the text.**
+The screenshot uses `assets/screenshots/demo-template.pptx`. Open that file, show the Selection Pane, and the four names appear as in the picture.
 
-- Type a token such as `{{CLIENT_NAME}}` inside a text box.
-- Use the ID inside the braces as the top-level YAML key.
+### Method 2: tokens in the text
 
-Matching rules:
+1. Type a token such as `{{CLIENT_NAME}}` inside a text box.
+2. Use the ID inside the braces as the top-level YAML key.
+3. Leave the shape name alone. Tokens match on the text, not on the name.
+
+![A text box on the slide containing the token {{DISCLAIMER}}. The shape is selected and the pane shows its default name TextBox 7.](assets/screenshots/token.png)
+
+In the screenshot the shape is still called `TextBox 7`, and the script fills it because its text contains `{{DISCLAIMER}}`.
+
+### Matching rules
 
 - Shape names match exactly first.
 - Shape names then match case-insensitively, with a warning.
